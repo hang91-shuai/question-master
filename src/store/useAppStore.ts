@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { AppState, FileItem, OutlineItem, QuestionBank, ExamPlanItem, Question, StepKey, PersonalProfile, UserRole, UserAccount } from '../types';
+import type { AppState, FileItem, OutlineItem, QuestionBank, ExamPlanItem, Question, StepKey, PersonalProfile, UserRole, UserAccount, WrongQuestion } from '../types';
 
 const defaultProfile: PersonalProfile = {
   name: '管理员',
@@ -25,6 +25,7 @@ export const useAppStore = create<AppState>()(
       examPlans: [],
       selectedBankId: null,
       profile: defaultProfile,
+      wrongQuestions: [],
 
       setCurrentStep: (step: StepKey) => set({ currentStep: step }),
 
@@ -132,6 +133,41 @@ export const useAppStore = create<AppState>()(
 
       updateProfile: (profile: Partial<PersonalProfile>) =>
         set((state) => ({ profile: { ...state.profile, ...profile } })),
+
+      addWrongQuestion: (entry) =>
+        set((state) => {
+          const exists = state.wrongQuestions.some(
+            (w) => w.userId === entry.userId && w.bankId === entry.bankId && w.questionId === entry.questionId
+          );
+          if (exists) return state;
+          const newEntry: WrongQuestion = {
+            id: `wq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            userId: entry.userId,
+            bankId: entry.bankId,
+            questionId: entry.questionId,
+            addedAt: new Date().toLocaleString(),
+            source: entry.source,
+            correctCount: 0,
+            wrongCount: 0,
+          };
+          return { wrongQuestions: [...state.wrongQuestions, newEntry] };
+        }),
+
+      removeWrongQuestion: (id) =>
+        set((state) => ({ wrongQuestions: state.wrongQuestions.filter((w) => w.id !== id) })),
+
+      bumpWrongStats: (id, correct) =>
+        set((state) => ({
+          wrongQuestions: state.wrongQuestions.map((w) =>
+            w.id === id
+              ? {
+                  ...w,
+                  correctCount: (w.correctCount || 0) + (correct ? 1 : 0),
+                  wrongCount: (w.wrongCount || 0) + (correct ? 0 : 1),
+                }
+              : w
+          ),
+        })),
     }),
     {
       name: 'question-master-storage',
@@ -146,6 +182,7 @@ export const useAppStore = create<AppState>()(
         currentUser: state.currentUser,
         currentUserName: state.currentUserName,
         userAccounts: state.userAccounts,
+        wrongQuestions: state.wrongQuestions,
       }),
     }
   )

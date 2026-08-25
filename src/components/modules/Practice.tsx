@@ -1,18 +1,25 @@
 import { useMemo, useState } from 'react';
 import {
   Button, Select, InputNumber, Checkbox, Radio, Tag, message,
-  Progress, Empty, Alert, Space, Divider, Result, Modal, Input,
+  Progress, Empty, Alert, Space, Divider, Result, Modal, Input, Badge, Segmented,
 } from 'antd';
 import {
   PlayCircleOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ArrowLeftOutlined, ArrowRightOutlined, ReloadOutlined, TrophyOutlined,
-  LogoutOutlined, SettingOutlined, UserOutlined,
+  LogoutOutlined, SettingOutlined, UserOutlined, FileTextOutlined,
+  BookOutlined, FormOutlined, DeleteOutlined, PlusOutlined,
 } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { shuffleArray } from '../../utils/mockAI';
 import type { Question, QuestionType } from '../../types';
 
 const ADMIN_PASSWORD = 'admin123';
+
+// 老师规定：考生刷题只保留 单选 / 多选 / 判断 三种客观题
+const PRACTICE_TYPES: QuestionType[] = ['single', 'multiple', 'judge'];
+
+// 标准考试固定配比：单选40 + 多选10 + 判断10 = 60道
+const STANDARD_QUOTA: Partial<Record<QuestionType, number>> = { single: 40, multiple: 10, judge: 10 };
 
 const typeLabels: Record<QuestionType, string> = {
   single: '单选题', multiple: '多选题', judge: '判断题', short: '简答题',
@@ -24,42 +31,111 @@ const typeShort: Record<QuestionType, string> = {
   case: '案例', calc: '计算', blank: '填空', ethics: '职业道德',
 };
 
-// 仅允许刷题的客观题题型
-const PRACTICE_TYPES: QuestionType[] = ['single', 'multiple', 'judge', 'blank'];
+// 题型配色
+const typeColor: Record<QuestionType, string> = {
+  single: 'blue', multiple: 'purple', judge: 'green', short: 'orange', essay: 'red',
+  case: 'gold', calc: 'cyan', blank: 'geekblue', ethics: 'magenta',
+};
 
-type View = 'config' | 'answer' | 'result';
+type View = 'home' | 'config' | 'answer' | 'result' | 'wrong';
 
 interface PracticeAnswer {
   questionId: string;
   userAnswer: string;
   correct: boolean;
   actual: string;
+  unscored?: boolean; // 本题无标准答案（answer 为占位符），不参与判分
 }
 
+// 解析用户答案（选项文本 或 "A. 文本" 或字母）→ 选项字母集合
+const parseToLetters = (input: string, options: string[]): Set<string> => {
+  const letters = new Set<string>();
+  const parts = input.split(/[,，、;；\s]+/).filter(Boolean);
+  for (const part of parts) {
+    const m = part.match(/^\s*([A-Za-z])(?:[.．、\s]|$)/);
+    if (m) {
+      letters.add(m[1].toUpperCase());
+      continue;
+    }
+    // 尝试匹配选项文本
+    const idx = options.findIndex((o) => o.trim() === part.trim());
+    if (idx >= 0) letters.add(String.fromCharCode(65 + idx));
+  }
+  return letters;
+};
+
+// 标准答案（可能存字母 "A,B" 或选项文本 "选项甲,选项乙"）→ 选项字母集合
+const parseAnswerToLetters = (answer: string, options: string[]): Set<string> | null => {
+  const trimmed = answer.replace(/\s+/g, '').toUpperCase();
+  if (!trimmed || trimmed === '略' || trimmed === '无' || trimmed === 'NONE') return null;
+  const parts = answer.split(/[,，、;；\s]+/).filter(Boolean);
+  const letters = new Set<string>();
+  let usedTextMatch = false;
+  for (const part of parts) {
+    const clean = part.replace(/^[A-Za-z][.．、\s]*/, '');
+    const m = part.match(/^\s*([A-Za-z])(?:[.．、\s]|$)/);
+    if (m) {
+      letters.add(m[1].toUpperCase());
+      usedTextMatch = usedTextMatch || clean.length === 0;
+      continue;
+    }
+    const idx = options.findIndex((o) => o.replace(/\s+/g, '') === part.replace(/\s+/g, ''));
+    if (idx >= 0) {
+      letters.add(String.fromCharCode(65 + idx));
+      usedTextMatch = true;
+    }
+  }
+  if (letters.size === 0) return null;
+  return letters;
+};
+
+// 答题模式：immediate=逐题即时对答案，batch=统一看答案
+type AnswerMode = 'immediate' | 'batch';
+
 export function Practice() {
-  const { questionBanks, currentUserName, setCurrentUser, setCurrentStep } = useAppStore();
+  const {
+    questionBanks, currentUserName, setCurrentUser, setCurrentStep,
+    wrongQuestions, addWrongQuestion, removeWrongQuestion, bumpWrongStats,
+  } = useAppStore();
 
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminPassword, setAdminPassword] = useState('');
 
-  const [view, setView] = useState<View>('config');
+  // 页面视图
+  const [view, setView] = useState<View>('home');
+  // 当前做题的错题ID（来自错题本练习）
+  const [practiceWrongIds, setPracticeWrongIds] = useState<string[]>([]);
+  // 每题所属题库映射，用于错题收集时正确归属
+  const [questionBankIds, setQuestionBankIds] = useState<Record<string, string>>({});
+  // 错题练习时：questionId -> wrong entry id，用于更新答对/答错统计
+  const [questionWrongMap, setQuestionWrongMap] = useState<Record<string, string>>({});
+
+  // 组卷配置
   const [bankId, setBankId] = useState<string | undefined>();
   const [count, setCount] = useState(50);
-  const [selectedTypes, setSelectedTypes] = useState<QuestionType[]>(['single', 'multiple', 'judge', 'blank']);
-  const [mode, setMode] = useState<'immediate' | 'batch'>('immediate');
+  const [selectedTypes, setSelectedTypes] = useState<QuestionType[]>(['single', 'multiple', 'judge']);
+  const [mode, setMode] = useState<AnswerMode>('immediate');
   const [shuffleQ, setShuffleQ] = useState(true);
 
+  // 答题状态
   const [questions, setQuestions] = useState<Question[]>([]);
   const [index, setIndex] = useState(0);
   const [curAnswer, setCurAnswer] = useState('');
   const [answers, setAnswers] = useState<PracticeAnswer[]>([]);
   const [revealed, setRevealed] = useState(false);
 
+  // 错题本筛选
+  const [wrongBankFilter, setWrongBankFilter] = useState<string | undefined>();
+
   const bank = useMemo(
     () => (bankId ? questionBanks.find((b) => b.id === bankId) : undefined),
     [bankId, questionBanks]
   );
 
+  // 当前用户标识
+  const userId = currentUserName || 'guest';
+
+  // 可选客观题（已审核通过）
   const available = useMemo(() => {
     if (!bank) return [];
     return bank.questions.filter((q) => PRACTICE_TYPES.includes(q.type) && q.status === 'approved');
@@ -71,16 +147,97 @@ export function Practice() {
     return map;
   }, [available]);
 
-  const startPractice = () => {
-    if (!bank) { message.warning('请先选择题库'); return; }
-    if (available.length === 0) { message.warning('当前题库没有可刷的客观题（单选/多选/判断/填空）'); return; }
-    if (selectedTypes.length === 0) { message.warning('请至少选择一种题型'); return; }
+  // 当前用户的错题本（关联出完整题目）
+  const myWrong = useMemo(() => {
+    return wrongQuestions.filter((w) => w.userId === userId);
+  }, [wrongQuestions, userId]);
 
+  const myWrongByBank = useMemo(() => {
+    const byBank = new Map<string, number>();
+    for (const w of myWrong) byBank.set(w.bankId, (byBank.get(w.bankId) || 0) + 1);
+    return byBank;
+  }, [myWrong]);
+
+  const wrongQuestionsDetail = useMemo(() => {
+    const list: { wrong: (typeof myWrong)[number]; question: Question }[] = [];
+    for (const w of myWrong) {
+      if (wrongBankFilter && w.bankId !== wrongBankFilter) continue;
+      const bk = questionBanks.find((b) => b.id === w.bankId);
+      const q = bk?.questions.find((qq) => qq.id === w.questionId);
+      if (q) list.push({ wrong: w, question: q });
+    }
+    return list;
+  }, [myWrong, questionBanks, wrongBankFilter]);
+
+  const wrongBanks = useMemo(() => {
+    return questionBanks.filter((b) => myWrongByBank.has(b.id));
+  }, [questionBanks, myWrongByBank]);
+
+  // ---------- 组卷 ----------
+  const pickQuestions = (type: QuestionType, need: number): Question[] => {
+    const pool = available.filter((q) => q.type === type);
+    return shuffleArray(pool).slice(0, need);
+  };
+
+  const startStandardPaper = () => {
+    if (!bank) { message.warning('请先选择题库'); return; }
+    const missing: string[] = [];
+    for (const t of PRACTICE_TYPES) {
+      const need = STANDARD_QUOTA[t] || 0;
+      if ((availableCounts.get(t) || 0) < need) missing.push(`${typeShort[t]}${availableCounts.get(t) || 0}题`);
+    }
+    if (missing.length) {
+      message.warning(`标准卷需要 单选40+多选10+判断10。当前题库 ${missing.join('、')}，不足请先补充题目或改自由刷题`);
+      return;
+    }
+    const picked: Question[] = [];
+    for (const t of PRACTICE_TYPES) {
+      picked.push(...pickQuestions(t, STANDARD_QUOTA[t] || 0));
+    }
+    beginPractice(picked);
+  };
+
+  const startFreePractice = () => {
+    if (!bank) { message.warning('请先选择题库'); return; }
+    if (available.length === 0) { message.warning('当前题库没有可刷的客观题'); return; }
+    if (selectedTypes.length === 0) { message.warning('请至少选择一种题型'); return; }
     let pool = available.filter((q) => selectedTypes.includes(q.type));
     if (shuffleQ) pool = shuffleArray(pool);
     const picked = pool.slice(0, count);
+    beginPractice(picked);
+  };
 
+  const beginPractice = (picked: Question[]) => {
+    if (picked.length === 0) { message.warning('没有可组卷的题目'); return; }
     setQuestions(picked);
+    // 记录每题所属题库（标准卷/自由刷题来自当前选中题库）
+    const map: Record<string, string> = {};
+    for (const q of picked) map[q.id] = bankId || '';
+    setQuestionBankIds(map);
+    setIndex(0);
+    setCurAnswer('');
+    setAnswers([]);
+    setRevealed(false);
+    setPracticeWrongIds([]);
+    setView('answer');
+  };
+
+  // 从错题本开始练习
+  const startWrongPractice = () => {
+    const pairs = wrongQuestionsDetail.map((d) => ({ wrong: d.wrong, question: d.question }));
+    if (pairs.length === 0) return;
+    const shuffled = shuffleQ ? shuffleArray(pairs) : pairs;
+    setPracticeWrongIds(shuffled.map((p) => p.wrong.id));
+    // 记录每题所属题库（来自错题本记录的 bankId）
+    const map: Record<string, string> = {};
+    const wmap: Record<string, string> = {};
+    for (const p of shuffled) {
+      map[p.question.id] = p.wrong.bankId;
+      wmap[p.question.id] = p.wrong.id;
+    }
+    setQuestionBankIds(map);
+    setQuestionWrongMap(wmap);
+    setQuestions(shuffled.map((p) => p.question));
     setIndex(0);
     setCurAnswer('');
     setAnswers([]);
@@ -90,36 +247,62 @@ export function Practice() {
 
   const currentQuestion = questions[index];
 
-  const checkCorrect = (q: Question, a: string): { correct: boolean; actual: string } => {
+  const checkCorrect = (q: Question, a: string): { correct: boolean; actual: string; unscored?: boolean } => {
     const actual = q.answer?.trim() || '';
     const ua = a.trim();
+    const options = q.options || [];
+
+    // 判断题
     if (q.type === 'judge') {
+      if (!actual || actual === '略' || actual === '无') return { correct: false, actual, unscored: true };
       const norm = (s: string) => (s.includes('正确') || s.includes('对') ? 'T' : s.includes('错误') || s.includes('错') ? 'F' : s);
       return { correct: norm(actual) === norm(ua) && ua !== '', actual };
     }
-    if (q.type === 'multiple') {
-      const setA = new Set(actual.split(/[,，、\s]+/).filter(Boolean).map((s) => s.trim()).sort());
-      const setU = new Set(ua.split(/[,，、\s]+/).filter(Boolean).map((s) => s.trim()).sort());
-      const same = setA.size > 0 && setU.size > 0 && setA.size === setU.size && [...setA].every((v) => setU.has(v));
-      return { correct: same, actual };
-    }
-    if (q.type === 'single') {
-      return { correct: actual !== '' && actual === ua, actual };
-    }
-    return { correct: ua !== '' && actual.replace(/\s+/g, '') === ua.replace(/\s+/g, ''), actual };
+
+    // 单选题 / 多选题：将标准答案与用户答案都归一化为"选项字母集合"再比对
+    const stdLetters = parseAnswerToLetters(actual, options);
+    if (!stdLetters) return { correct: false, actual, unscored: true };
+    const userLetters = parseToLetters(ua, options);
+    const same =
+      stdLetters.size > 0 &&
+      userLetters.size > 0 &&
+      stdLetters.size === userLetters.size &&
+      [...stdLetters].every((v) => userLetters.has(v));
+    return { correct: same, actual };
   };
 
   const submitCurrent = () => {
     const q = currentQuestion;
     if (!q) return;
     if (curAnswer.trim() === '') { message.warning('请先作答本题'); return; }
-    const { correct, actual } = checkCorrect(q, curAnswer);
+    const { correct, actual, unscored } = checkCorrect(q, curAnswer);
     const newAnswers = [...answers];
     const idx = newAnswers.findIndex((x) => x.questionId === q.id);
-    const entry: PracticeAnswer = { questionId: q.id, userAnswer: curAnswer, correct, actual };
+    const entry: PracticeAnswer = { questionId: q.id, userAnswer: curAnswer, correct, actual, unscored };
     if (idx >= 0) newAnswers[idx] = entry; else newAnswers.push(entry);
     setAnswers(newAnswers);
     if (mode === 'immediate') setRevealed(true);
+
+    // 答错 → 自动收进错题本（用该题所属题库）；无标准答案的题不判错，不进错题本
+    if (!correct && !unscored) {
+      addWrongQuestion({ userId, bankId: questionBankIds[q.id] || '', questionId: q.id, source: 'auto' });
+    }
+
+    // 错题练习：更新该错题的答对/答错统计
+    const wrongId = questionWrongMap[q.id];
+    if (wrongId) {
+      bumpWrongStats(wrongId, correct);
+    }
+  };
+
+  const manualAddWrong = (q: Question) => {
+    addWrongQuestion({ userId, bankId: questionBankIds[q.id] || '', questionId: q.id, source: 'manual' });
+    message.success('已加入错题本');
+  };
+
+  const removeWrong = (id: string) => {
+    removeWrongQuestion(id);
+    message.success('已从错题本移除');
   };
 
   const nextQuestion = () => {
@@ -142,131 +325,235 @@ export function Practice() {
   };
 
   const restart = () => {
-    setView('config');
+    setView('home');
     setQuestions([]);
     setAnswers([]);
+    setPracticeWrongIds([]);
+    setQuestionWrongMap({});
   };
 
   const answeredCount = answers.length;
   const correctCount = answers.filter((a) => a.correct).length;
   const score = answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : 0;
 
-  // ================== 全屏容器 ==================
+  // ================== 渲染 ==================
   return (
-    <div className="min-h-screen bg-[#f6f8fb]">
-      <div className="max-w-[900px] mx-auto px-4 py-8">
-        {/* 考生端顶栏：考生信息 + 后台入口（常驻） */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-2">
-            <TrophyOutlined style={{ color: '#1677ff', fontSize: 20 }} />
-            <span className="text-lg font-bold">题库刷题练习</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1 text-gray-500 text-sm">
-              <UserOutlined /> {currentUserName || '考生'}
-            </span>
-            <button
-              onClick={() => setAdminOpen(true)}
-              className="text-gray-300 hover:text-gray-600 text-xs flex items-center gap-1 transition-colors"
-              title="管理后台"
-            >
-              <SettingOutlined /> 后台
-            </button>
-            <Button
-              type="text"
-              size="small"
-              icon={<LogoutOutlined />}
-              onClick={() => { setCurrentUser('guest', ''); }}
-            >
-              退出
-            </Button>
+    <div className="min-h-screen bg-[#eef2f7]">
+      {/* 顶部渐变横幅 */}
+      <div className="bg-gradient-to-r from-[#0f4c81] via-[#1e6fb5] to-[#2a9d8f] text-white">
+        <div className="max-w-[980px] mx-auto px-4 py-5 sm:py-6">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <TrophyOutlined style={{ fontSize: 22 }} />
+              <span className="text-lg sm:text-xl font-bold tracking-wide">题库刷题 · 错题本</span>
+            </div>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <span className="flex items-center gap-1 text-white/90 text-sm">
+                <UserOutlined /> {currentUserName || '考生'}
+              </span>
+              <button
+                onClick={() => setAdminOpen(true)}
+                className="text-white/60 hover:text-white text-xs flex items-center gap-1 transition-colors"
+                title="管理后台"
+              >
+                <SettingOutlined /> 后台
+              </button>
+              <Button
+                type="text"
+                size="small"
+                icon={<LogoutOutlined />}
+                className="!text-white/80 hover:!text-white"
+                onClick={() => { setCurrentUser('guest', ''); }}
+              >
+                退出
+              </Button>
+            </div>
           </div>
         </div>
+      </div>
 
-        {/* 管理员入口弹窗 */}
-        <Modal
-          title="管理员登录"
-          open={adminOpen}
-          onCancel={() => { setAdminOpen(false); setAdminPassword(''); }}
-          footer={null}
-          width={360}
-        >
-          <div className="space-y-4 pt-2">
-            <Input.Password
-              placeholder="请输入管理员密码"
-              value={adminPassword}
-              onChange={(e) => setAdminPassword(e.target.value)}
-              onPressEnter={() => {
-                if (adminPassword === ADMIN_PASSWORD) {
-                  setAdminOpen(false);
-                  setAdminPassword('');
-                  setCurrentUser('admin', '管理员');
-                  setCurrentStep('import');
-                } else {
-                  message.error('管理员密码错误');
-                }
-              }}
-            />
-            <Button
-              type="primary"
-              block
-              onClick={() => {
-                if (adminPassword === ADMIN_PASSWORD) {
-                  setAdminOpen(false);
-                  setAdminPassword('');
-                  setCurrentUser('admin', '管理员');
-                  setCurrentStep('import');
-                } else {
-                  message.error('管理员密码错误');
-                }
-              }}
-            >
-              进入管理后台
-            </Button>
+      {/* 管理员入口弹窗 */}
+      <Modal
+        title="管理员登录"
+        open={adminOpen}
+        onCancel={() => { setAdminOpen(false); setAdminPassword(''); }}
+        footer={null}
+        width={360}
+      >
+        <div className="space-y-4 pt-2">
+          <Input.Password
+            placeholder="请输入管理员密码"
+            value={adminPassword}
+            onChange={(e) => setAdminPassword(e.target.value)}
+            onPressEnter={() => {
+              if (adminPassword === ADMIN_PASSWORD) {
+                setAdminOpen(false);
+                setAdminPassword('');
+                setCurrentUser('admin', '管理员');
+                setCurrentStep('import');
+              } else {
+                message.error('管理员密码错误');
+              }
+            }}
+          />
+          <Button
+            type="primary"
+            block
+            onClick={() => {
+              if (adminPassword === ADMIN_PASSWORD) {
+                setAdminOpen(false);
+                setAdminPassword('');
+                setCurrentUser('admin', '管理员');
+                setCurrentStep('import');
+              } else {
+                message.error('管理员密码错误');
+              }
+            }}
+          >
+            进入管理后台
+          </Button>
+        </div>
+      </Modal>
+
+      <div className="max-w-[980px] mx-auto px-3 sm:px-4 py-4 sm:py-6">
+
+        {/* ========== 首页：选择章节 + 三大入口 ========== */}
+        {view === 'home' && (
+          <div>
+            {/* 选择题库（章节） */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-6">
+              <div className="flex items-center gap-2 mb-3">
+                <BookOutlined className="text-[#1e6fb5]" />
+                <span className="font-semibold text-gray-800">选择章节（题库）</span>
+              </div>
+              <Select
+                placeholder="请选择题库"
+                size="large"
+                style={{ width: '100%' }}
+                value={bankId}
+                onChange={setBankId}
+                options={questionBanks.map((b) => ({ value: b.id, label: b.name }))}
+              />
+              {bank && (
+                <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+                  {PRACTICE_TYPES.map((t) => (
+                    <Tag key={t} color={typeColor[t]}>{typeShort[t]} {availableCounts.get(t) || 0}题</Tag>
+                  ))}
+                  <Tag>共 {available.length} 题可刷</Tag>
+                </div>
+              )}
+            </div>
+
+            {/* 三大入口 */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mt-4">
+              {/* 标准卷组卷 */}
+              <button
+                onClick={startStandardPaper}
+                disabled={!bank || available.length === 0}
+                className={`group relative text-left rounded-2xl p-4 sm:p-5 transition-all overflow-hidden border ${
+                  bank && available.length > 0
+                    ? 'bg-white shadow-sm hover:shadow-md hover:-translate-y-0.5 border-gray-100'
+                    : 'bg-gray-50 border-gray-100 opacity-60 cursor-not-allowed'
+                }`}
+              >
+                <div className="absolute right-0 top-0 w-20 h-20 bg-gradient-to-br from-[#1e6fb5]/10 to-transparent rounded-bl-full" />
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#1e6fb5] to-[#2a9d8f] text-white flex items-center justify-center mb-3">
+                  <FileTextOutlined style={{ fontSize: 18 }} />
+                </div>
+                <div className="font-bold text-gray-800 text-base">标准考试卷</div>
+                <div className="text-xs text-gray-500 mt-1">按正规考试配比自动组卷</div>
+                <div className="mt-2 text-[11px] text-[#1e6fb5] font-medium">单选40 + 多选10 + 判断10</div>
+              </button>
+
+              {/* 自由刷题 */}
+              <button
+                onClick={() => { if (!bank) { message.warning('请先选择题库'); return; } setView('config'); }}
+                disabled={!bank}
+                className={`group relative text-left rounded-2xl p-4 sm:p-5 transition-all overflow-hidden border ${
+                  bank
+                    ? 'bg-white shadow-sm hover:shadow-md hover:-translate-y-0.5 border-gray-100'
+                    : 'bg-gray-50 border-gray-100 opacity-60 cursor-not-allowed'
+                }`}
+              >
+                <div className="absolute right-0 top-0 w-20 h-20 bg-gradient-to-br from-[#f2994a]/10 to-transparent rounded-bl-full" />
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#f2994a] to-[#eb5757] text-white flex items-center justify-center mb-3">
+                  <FormOutlined style={{ fontSize: 18 }} />
+                </div>
+                <div className="font-bold text-gray-800 text-base">自由刷题</div>
+                <div className="text-xs text-gray-500 mt-1">自选题型、数量，想刷多少刷多少</div>
+                <div className="mt-2 text-[11px] text-[#f2994a] font-medium">按需组卷，灵活练习</div>
+              </button>
+
+              {/* 错题本 */}
+              <button
+                onClick={() => { if (myWrong.length === 0) { message.info('错题本还是空的，先去刷题吧'); return; } setView('wrong'); }}
+                className="group relative text-left rounded-2xl p-4 sm:p-5 transition-all overflow-hidden border bg-white shadow-sm hover:shadow-md hover:-translate-y-0.5 border-gray-100"
+              >
+                <div className="absolute right-0 top-0 w-20 h-20 bg-gradient-to-br from-[#eb5757]/10 to-transparent rounded-bl-full" />
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#eb5757] to-[#f2994a] text-white flex items-center justify-center mb-3">
+                  <Badge count={myWrong.length} size="small" offset={[2, 0]}>
+                    <BookOutlined style={{ fontSize: 18 }} />
+                  </Badge>
+                </div>
+                <div className="font-bold text-gray-800 text-base">错题本</div>
+                <div className="text-xs text-gray-500 mt-1">答错自动收录，可手动收藏</div>
+                <div className="mt-2 text-[11px] text-[#eb5757] font-medium">已收录 {myWrong.length} 题</div>
+              </button>
+            </div>
+
+            <div className="text-center text-xs text-gray-400 mt-5">
+              提示：答题答错的题目会自动收进错题本；答对的题如果觉得没掌握，也可以手动加入错题本反复练习。
+            </div>
           </div>
-        </Modal>
+        )}
 
+        {/* ========== 自由刷题配置 ========== */}
         {view === 'config' && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 max-w-xl mx-auto">
-            <div className="text-xl font-bold text-center mb-6">开始刷题</div>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-8 max-w-xl mx-auto">
+            <div className="flex items-center gap-2 mb-5">
+              <Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => setView('home')}>返回</Button>
+              <span className="text-lg font-bold text-gray-800">自由刷题设置</span>
+            </div>
 
             <div className="space-y-6">
               <div>
-                <div className="text-sm font-medium text-gray-700 mb-2">选择题库</div>
-                <Select
-                  placeholder="请选择题库"
-                  style={{ width: '100%' }}
-                  value={bankId}
-                  onChange={setBankId}
-                  options={questionBanks.map((b) => ({ value: b.id, label: b.name }))}
-                />
-                {bank && (
-                  <div className="mt-1 text-xs text-gray-400">
-                    可刷 {available.length} 道客观题（{PRACTICE_TYPES.map((t) => `${typeShort[t]}${availableCounts.get(t) || 0}`).join(' / ')}）
-                  </div>
-                )}
+                <div className="text-sm font-medium text-gray-700 mb-2">当前章节</div>
+                <div className="text-sm text-[#1e6fb5] font-medium">{bank?.name || '未选择'}</div>
               </div>
 
               <div>
-                <div className="text-sm font-medium text-gray-700 mb-2">题型</div>
+                <div className="text-sm font-medium text-gray-700 mb-2">题型（可多选）</div>
                 <Checkbox.Group
                   value={selectedTypes}
                   onChange={(v) => setSelectedTypes(v as QuestionType[])}
-                  options={PRACTICE_TYPES.map((t) => ({ label: typeLabels[t], value: t }))}
+                  options={PRACTICE_TYPES.map((t) => ({ label: `${typeLabels[t]}（${availableCounts.get(t) || 0}）`, value: t }))}
                 />
               </div>
 
               <div>
                 <div className="text-sm font-medium text-gray-700 mb-2">本次刷题数量</div>
-                <InputNumber min={1} max={Math.max(1, selectedTypes.reduce((acc, t) => acc + (availableCounts.get(t) || 0), 0) || 500)} value={count} onChange={(v) => setCount(v || 1)} style={{ width: 180 }} addonAfter="道" />
+                <InputNumber
+                  min={1}
+                  max={Math.max(1, selectedTypes.reduce((acc, t) => acc + (availableCounts.get(t) || 0), 0) || 500)}
+                  value={count}
+                  onChange={(v) => setCount(v || 1)}
+                  style={{ width: '100%' }}
+                  addonAfter="道"
+                  size="large"
+                />
               </div>
 
               <div>
                 <div className="text-sm font-medium text-gray-700 mb-2">答案展示方式</div>
-                <Radio.Group value={mode} onChange={(e) => setMode(e.target.value)} optionType="button" buttonStyle="solid">
-                  <Radio.Button value="immediate">逐题即时对答案</Radio.Button>
-                  <Radio.Button value="batch">刷完统一看答案</Radio.Button>
-                </Radio.Group>
+                <Segmented
+                  block
+                  value={mode}
+                  onChange={(v) => setMode(v as AnswerMode)}
+                  options={[
+                    { label: '逐题即时对答案', value: 'immediate' },
+                    { label: '刷完统一看答案', value: 'batch' },
+                  ]}
+                />
               </div>
 
               <div>
@@ -274,23 +561,35 @@ export function Practice() {
               </div>
             </div>
 
-            <Button type="primary" size="large" block icon={<PlayCircleOutlined />} className="mt-8" onClick={startPractice} disabled={available.length === 0}>
+            <Button
+              type="primary"
+              size="large"
+              block
+              icon={<PlayCircleOutlined />}
+              className="mt-8 !bg-[#1e6fb5] !h-12 !rounded-xl"
+              onClick={startFreePractice}
+              disabled={available.length === 0}
+            >
               开始刷题
             </Button>
           </div>
         )}
 
+        {/* ========== 答题中 ========== */}
         {view === 'answer' && currentQuestion && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-8">
             {/* 顶部：进度 */}
-            <div className="flex items-center justify-between mb-4">
-              <Tag color="blue">{typeLabels[currentQuestion.type]}</Tag>
-              <span className="text-gray-500 text-sm">第 {index + 1} / {questions.length} 题 · 已答 {answeredCount} 题</span>
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <Tag color={typeColor[currentQuestion.type]}>{typeLabels[currentQuestion.type]}</Tag>
+                {practiceWrongIds.length > 0 && <Tag color="red">错题练习</Tag>}
+              </div>
+              <span className="text-gray-500 text-xs sm:text-sm">第 {index + 1} / {questions.length} 题 · 已答 {answeredCount} 题</span>
             </div>
-            <Progress percent={Math.round(((index + 1) / questions.length) * 100)} showInfo={false} strokeColor="#1677ff" />
+            <Progress percent={Math.round(((index + 1) / questions.length) * 100)} showInfo={false} strokeColor="#1e6fb5" />
 
             {/* 题目 */}
-            <div className="mt-6 text-lg font-medium text-gray-800 leading-relaxed">
+            <div className="mt-5 sm:mt-6 text-base sm:text-lg font-medium text-gray-800 leading-relaxed">
               {index + 1}. {currentQuestion.content}
             </div>
 
@@ -300,7 +599,7 @@ export function Practice() {
                 <Radio.Group value={curAnswer} onChange={(e) => setCurAnswer(e.target.value)} style={{ width: '100%' }}>
                   <Space direction="vertical" style={{ width: '100%' }}>
                     {(currentQuestion.options || []).map((opt) => (
-                      <Radio key={opt} value={opt} className="w-full py-2 px-3 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50">
+                      <Radio key={opt} value={opt} className="w-full py-2.5 px-3 rounded-xl border border-gray-100 hover:border-blue-300 hover:bg-blue-50/60 transition-colors">
                         {opt}
                       </Radio>
                     ))}
@@ -312,7 +611,7 @@ export function Practice() {
                 <Checkbox.Group value={curAnswer ? curAnswer.split(',') : []} onChange={(v) => setCurAnswer((v as string[]).join(','))} style={{ width: '100%' }}>
                   <Space direction="vertical" style={{ width: '100%' }}>
                     {(currentQuestion.options || []).map((opt) => (
-                      <Checkbox key={opt} value={opt} className="w-full py-2 px-3 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50">
+                      <Checkbox key={opt} value={opt} className="w-full py-2.5 px-3 rounded-xl border border-gray-100 hover:border-blue-300 hover:bg-blue-50/60 transition-colors">
                         {opt}
                       </Checkbox>
                     ))}
@@ -323,39 +622,47 @@ export function Practice() {
               {currentQuestion.type === 'judge' && (
                 <Radio.Group value={curAnswer} onChange={(e) => setCurAnswer(e.target.value)} style={{ width: '100%' }}>
                   <Space direction="vertical" style={{ width: '100%' }}>
-                    <Radio value="正确" className="w-full py-2 px-3 rounded-lg border border-transparent hover:border-green-200 hover:bg-green-50">
+                    <Radio value="正确" className="w-full py-3 px-3 rounded-xl border border-gray-100 hover:border-green-300 hover:bg-green-50/60 transition-colors">
                       <CheckCircleOutlined style={{ color: '#52c41a' }} className="mr-1" />正确
                     </Radio>
-                    <Radio value="错误" className="w-full py-2 px-3 rounded-lg border border-transparent hover:border-red-200 hover:bg-red-50">
+                    <Radio value="错误" className="w-full py-3 px-3 rounded-xl border border-gray-100 hover:border-red-300 hover:bg-red-50/60 transition-colors">
                       <CloseCircleOutlined style={{ color: '#ff4d4f' }} className="mr-1" />错误
                     </Radio>
                   </Space>
                 </Radio.Group>
-              )}
-
-              {currentQuestion.type === 'blank' && (
-                <input
-                  className="border border-gray-300 rounded-lg px-4 py-2 w-full max-w-md focus:outline-none focus:border-blue-500"
-                  placeholder="请输入答案（多个空用 / 分隔）"
-                  value={curAnswer}
-                  onChange={(e) => setCurAnswer(e.target.value)}
-                />
               )}
             </div>
 
             {/* 即时模式反馈 */}
             {mode === 'immediate' && !revealed && (
               <div className="mt-6">
-                <Button type="primary" size="large" icon={<CheckCircleOutlined />} onClick={submitCurrent}>提交本题</Button>
+                <Button type="primary" size="large" icon={<CheckCircleOutlined />} className="!bg-[#1e6fb5]" onClick={submitCurrent}>提交本题</Button>
               </div>
             )}
 
-            {mode === 'immediate' && revealed && (
+            {mode === 'immediate' && revealed && (() => {
+              const curAns = answers.find((a) => a.questionId === currentQuestion.id);
+              return (
               <div className="mt-6">
+                {curAns?.unscored ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="本题暂无标准答案"
+                    description={
+                      <div>
+                        <div>该题未录入标准答案，无法自动判分，请自行对照解析或资料核对。</div>
+                        {currentQuestion.analysis && currentQuestion.analysis !== '无' && currentQuestion.analysis !== '略' && (
+                          <div className="mt-1"><b>解析：</b>{currentQuestion.analysis}</div>
+                        )}
+                      </div>
+                    }
+                  />
+                ) : (
                 <Alert
-                  type={answers.find((a) => a.questionId === currentQuestion.id)?.correct ? 'success' : 'error'}
+                  type={curAns?.correct ? 'success' : 'error'}
                   showIcon
-                  message={answers.find((a) => a.questionId === currentQuestion.id)?.correct ? '回答正确' : '回答错误'}
+                  message={curAns?.correct ? '回答正确' : '回答错误'}
                   description={
                     <div>
                       <div><b>正确答案：</b>{currentQuestion.answer}</div>
@@ -365,59 +672,68 @@ export function Practice() {
                     </div>
                   }
                 />
+                )}
+                {/* 答对但觉得没掌握 → 手动收藏 */}
+                {answers.find((a) => a.questionId === currentQuestion.id)?.correct && (
+                  <div className="mt-3 flex justify-end">
+                    <Button size="small" icon={<PlusOutlined />} onClick={() => manualAddWrong(currentQuestion)}>觉得没掌握，加入错题本</Button>
+                  </div>
+                )}
               </div>
-            )}
+              );
+            })()}
 
             {/* 批量模式 */}
             {mode === 'batch' && (
               <div className="mt-6">
-                <Button type="primary" size="large" icon={<CheckCircleOutlined />} onClick={submitCurrent}>记录本题</Button>
+                <Button type="primary" size="large" icon={<CheckCircleOutlined />} className="!bg-[#1e6fb5]" onClick={submitCurrent}>记录本题</Button>
               </div>
             )}
 
             <Divider />
 
             {/* 底部导航 */}
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2 mt-2 flex-wrap">
               <Button icon={<ArrowLeftOutlined />} onClick={prevQuestion} disabled={index === 0}>上一题</Button>
-              <Space>
+              <div className="flex items-center gap-2 flex-wrap justify-end">
                 {mode === 'batch' && (
-                  <Button onClick={() => setView('result')}>提前交卷看答案</Button>
+                  <Button onClick={() => setView('result')}>交卷看答案</Button>
                 )}
-                <Button type="primary" size="large" onClick={nextQuestion}>
-                  {index < questions.length - 1 ? (<><span className="mr-1">下一题</span><ArrowRightOutlined /></>) : ('完成并看结果')}
+                <Button type="primary" size="large" className="!bg-[#1e6fb5]" onClick={nextQuestion}>
+                  {index < questions.length - 1 ? (<><span className="mr-1">下一题</span><ArrowRightOutlined /></>) : ('完成看结果')}
                 </Button>
-              </Space>
+              </div>
             </div>
           </div>
         )}
 
         {view === 'answer' && !currentQuestion && <Empty description="没有可显示的题目" />}
 
+        {/* ========== 结果页 ========== */}
         {view === 'result' && (
           <div>
             <Result
-              icon={<TrophyOutlined style={{ color: '#1677ff' }} />}
+              icon={<TrophyOutlined style={{ color: '#1e6fb5' }} />}
               title="本次练习完成"
               subTitle={`共 ${questions.length} 题，已答 ${answeredCount} 题，答对 ${correctCount} 题`}
             />
-            <div className="grid grid-cols-3 gap-4 max-w-xl mx-auto mb-8">
-              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
-                <div className="text-gray-500 text-sm">正确率</div>
-                <div className="text-3xl font-bold text-blue-600 mt-1">{score}%</div>
+            <div className="grid grid-cols-3 gap-2 sm:gap-4 max-w-xl mx-auto mb-6 sm:mb-8 px-1">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-3 sm:p-4 text-center">
+                <div className="text-gray-500 text-xs sm:text-sm">正确率</div>
+                <div className="text-xl sm:text-3xl font-bold text-[#1e6fb5] mt-1">{score}%</div>
               </div>
-              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
-                <div className="text-gray-500 text-sm">答对</div>
-                <div className="text-3xl font-bold text-green-600 mt-1">{correctCount}</div>
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-3 sm:p-4 text-center">
+                <div className="text-gray-500 text-xs sm:text-sm">答对</div>
+                <div className="text-xl sm:text-3xl font-bold text-green-600 mt-1">{correctCount}</div>
               </div>
-              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
-                <div className="text-gray-500 text-sm">答错</div>
-                <div className="text-3xl font-bold text-red-500 mt-1">{answeredCount - correctCount}</div>
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-3 sm:p-4 text-center">
+                <div className="text-gray-500 text-xs sm:text-sm">答错（已入错题本）</div>
+                <div className="text-xl sm:text-3xl font-bold text-red-500 mt-1">{answeredCount - correctCount}</div>
               </div>
             </div>
 
             {/* 答题明细 */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-6">
               <h3 className="font-semibold text-gray-800 mb-3">答题明细</h3>
               {answers.length === 0 ? (
                 <Empty description="暂无作答记录" />
@@ -426,22 +742,35 @@ export function Practice() {
                   {questions.map((q, i) => {
                     const ans = answers.find((a) => a.questionId === q.id);
                     if (!ans) return null;
+                    const inWrong = myWrong.some((w) => w.questionId === q.id && w.bankId === (questionBankIds[q.id] || ''));
                     return (
-                      <div key={q.id} className="border border-gray-200 rounded-lg p-3">
+                      <div key={q.id} className="border border-gray-200 rounded-xl p-3">
                         <div className="flex items-start gap-2">
                           {ans.correct
                             ? <CheckCircleOutlined style={{ color: '#52c41a', marginTop: 4 }} />
                             : <CloseCircleOutlined style={{ color: '#ff4d4f', marginTop: 4 }} />}
                           <div className="flex-1">
                             <div className="text-sm text-gray-800">
-                              <Tag color="blue" className="mr-1">{typeShort[q.type]}</Tag>
+                              <Tag color={typeColor[q.type]} className="mr-1">{typeShort[q.type]}</Tag>
                               {i + 1}. {q.content}
                             </div>
                             <div className="mt-1 text-xs">
-                              <div className="text-gray-500">你的答案：<span className={ans.correct ? 'text-green-600' : 'text-red-500'}>{ans.userAnswer || '（未作答）'}</span></div>
-                              {!ans.correct && <div className="text-green-600">正确答案：{q.answer}</div>}
+                              <div className="text-gray-500">你的答案：<span className={ans.correct ? 'text-green-600' : ans.unscored ? 'text-gray-500' : 'text-red-500'}>{ans.userAnswer || '（未作答）'}</span></div>
+                              {ans.unscored
+                                ? <div className="text-gray-400">本题无标准答案，未判分</div>
+                                : (!ans.correct && <div className="text-green-600">正确答案：{q.answer}</div>)}
                               {q.analysis && q.analysis !== '无' && q.analysis !== '略' && (
                                 <div className="text-gray-500 mt-1">解析：{q.analysis}</div>
+                              )}
+                            </div>
+                            {/* 结果页操作：答对可收藏，已收藏可取消 */}
+                            <div className="mt-2">
+                              {ans.correct ? (
+                                inWrong
+                                  ? <Button size="small" icon={<CheckCircleOutlined />} className="text-[#52c41a]" disabled>已在错题本</Button>
+                                  : <Button size="small" icon={<PlusOutlined />} onClick={() => manualAddWrong(q)}>加入错题本</Button>
+                              ) : (
+                                <Tag color="red" icon={<BookOutlined />}>已自动收入错题本</Tag>
                               )}
                             </div>
                           </div>
@@ -453,10 +782,77 @@ export function Practice() {
               )}
             </div>
 
-            <div className="flex justify-center gap-3 mt-6">
-              <Button icon={<ReloadOutlined />} onClick={restart}>重新刷题</Button>
-              <Button type="primary" onClick={() => setView('config')}>返回开始</Button>
+            <div className="flex justify-center gap-3 mt-6 flex-wrap">
+              <Button icon={<ReloadOutlined />} onClick={restart}>返回首页</Button>
+              <Button type="primary" className="!bg-[#1e6fb5]" icon={<BookOutlined />} onClick={() => { if (myWrong.length) setView('wrong'); else { message.info('错题本还是空的'); setView('home'); } }}>
+                去错题本
+              </Button>
             </div>
+          </div>
+        )}
+
+        {/* ========== 错题本 ========== */}
+        {view === 'wrong' && (
+          <div>
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+              <Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => setView('home')}>返回</Button>
+              <span className="text-lg font-bold text-gray-800">我的错题本</span>
+              <Tag color="red">{myWrong.length} 题</Tag>
+            </div>
+
+            {/* 按章节筛选 */}
+            {wrongBanks.length > 1 && (
+              <div className="mb-4">
+                <Select
+                  placeholder="按章节筛选"
+                  allowClear
+                  style={{ width: '100%', maxWidth: 280 }}
+                  value={wrongBankFilter}
+                  onChange={setWrongBankFilter}
+                  options={wrongBanks.map((b) => ({ value: b.id, label: `${b.name}（${myWrongByBank.get(b.id) || 0}）` }))}
+                />
+              </div>
+            )}
+
+            {wrongQuestionsDetail.length === 0 ? (
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10">
+                <Empty description="该章节暂无错题，去刷题积累错题本吧">
+                  <Button type="primary" className="!bg-[#1e6fb5]" onClick={() => setView('home')}>去刷题</Button>
+                </Empty>
+              </div>
+            ) : (
+              <>
+                <div className="flex gap-3 mb-4 flex-wrap">
+                  <Button type="primary" icon={<ReloadOutlined />} className="!bg-[#1e6fb5]" onClick={startWrongPractice}>开始错题练习</Button>
+                  <Button onClick={() => setView('home')}>返回刷题</Button>
+                </div>
+
+                <div className="space-y-3">
+                  {wrongQuestionsDetail.map(({ wrong, question }, i) => {
+                    const bk = questionBanks.find((b) => b.id === wrong.bankId);
+                    return (
+                      <div key={wrong.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+                        <div className="flex items-start gap-2">
+                          <Tag color={typeColor[question.type]}>{typeShort[question.type]}</Tag>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm text-gray-800 leading-relaxed">{i + 1}. {question.content}</div>
+                            <div className="mt-2 text-xs text-gray-400 flex flex-wrap gap-1">
+                              <Tag>{bk?.name || '未知题库'}</Tag>
+                              {wrong.source === 'manual' && <Tag color="gold">手动收藏</Tag>}
+                              {wrong.source === 'auto' && <Tag color="red">答错自动收录</Tag>}
+                              <span>答对 {wrong.correctCount || 0} 次 / 答错 {wrong.wrongCount || 0} 次</span>
+                            </div>
+                            <div className="mt-2">
+                              <Button size="small" danger icon={<DeleteOutlined />} onClick={() => removeWrong(wrong.id)}>移出错题本</Button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

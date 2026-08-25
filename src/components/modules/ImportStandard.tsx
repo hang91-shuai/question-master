@@ -194,6 +194,7 @@ export function ImportStandard() {
             dataSource={standardFiles}
             pagination={false}
             className="mt-4"
+            scroll={{ x: 480 }}
           />
         )}
       </Card>
@@ -223,6 +224,7 @@ export function ImportStandard() {
             dataSource={materialFiles}
             pagination={false}
             className="mt-4"
+            scroll={{ x: 480 }}
           />
         )}
       </Card>
@@ -235,29 +237,29 @@ export function ImportStandard() {
               选择用于解析与出题的大模型，并确定职业技能的所属类型，然后一键解析职业功能。
             </Paragraph>
           </div>
-          <div className="flex gap-4 items-center">
-            <div>
+          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 items-start sm:items-center w-full sm:w-auto">
+            <div className="w-full sm:w-auto">
               <div className="text-sm text-gray-500 mb-1">AI 模型</div>
               <Select
                 value={aiModel}
                 onChange={setAiModel}
                 options={aiModels}
-                style={{ width: 180 }}
+                className="w-full sm:w-[180px]"
               />
             </div>
-            <div>
+            <div className="w-full sm:w-auto">
               <div className="text-sm text-gray-500 mb-1">技能类型</div>
               <Select
                 value={skillType}
                 onChange={setSkillType}
                 options={skillTypes}
-                style={{ width: 220 }}
+                className="w-full sm:w-[220px]"
               />
             </div>
           </div>
         </div>
 
-        <div className="mt-5 flex items-center gap-4">
+        <div className="mt-5 flex flex-wrap items-center gap-3">
           <Button
             type="primary"
             icon={<ThunderboltOutlined />}
@@ -267,7 +269,7 @@ export function ImportStandard() {
           >
             {parsing ? '正在解析职业功能…' : '开始解析职业功能'}
           </Button>
-          {parsing && <Progress percent={progress} style={{ width: 260 }} />}
+          {parsing && <Progress percent={progress} style={{ width: '100%', maxWidth: 260 }} />}
         </div>
       </Card>
 

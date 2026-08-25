@@ -52,15 +52,15 @@ function AppContent() {
     <div className="min-h-screen bg-[#f6f8fb]">
       <Header />
       <StepNav />
-      <main className="max-w-[1440px] mx-auto px-6 py-6">
+      <main className="max-w-[1440px] mx-auto px-3 sm:px-6 py-4 sm:py-6 overflow-x-hidden">
         {['generate', 'review', 'manage'].includes(currentStep) && (
-          <div className="mb-5">
+          <div className="mb-4 sm:mb-5">
             <CloudSync />
           </div>
         )}
         <Module />
       </main>
-      <footer className="text-center text-gray-400 text-xs py-8 flex items-center justify-center gap-3">
+      <footer className="text-center text-gray-400 text-xs py-6 sm:py-8 flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-3 px-4">
         职业技能等级命题大师 · 本地优先 · 全等级可溯源题库平台
         <Button
           type="link"

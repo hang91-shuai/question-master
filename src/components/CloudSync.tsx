@@ -74,7 +74,7 @@ export function CloudSync() {
             )}
           </div>
         </div>
-        <div className="flex gap-2 shrink-0">
+        <div className="flex flex-wrap gap-2 shrink-0">
           <Tooltip title="把当前题库上传到云端，供所有访问者刷题">
             <Button
               type="primary"

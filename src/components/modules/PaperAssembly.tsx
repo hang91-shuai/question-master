@@ -106,22 +106,22 @@ export function PaperAssembly() {
         </div>
         <div className="text-gray-500 text-sm mb-5">依据组卷计划书，从已审核通过的题库中按比例随机抽题，生成正式试卷。</div>
 
-        <div className="flex flex-wrap gap-4 items-center mb-4">
-          <div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap gap-4 items-start sm:items-center mb-4">
+          <div className="w-full sm:w-auto">
             <div className="text-sm text-gray-500 mb-1">选择题库</div>
-            <Select placeholder="选择题库" style={{ width: 240 }} value={bankId || currentBank?.id} onChange={setBankId} options={questionBanks.map((b) => ({ value: b.id, label: b.name }))} />
+            <Select placeholder="选择题库" className="w-full sm:w-[240px]" value={bankId || currentBank?.id} onChange={setBankId} options={questionBanks.map((b) => ({ value: b.id, label: b.name }))} />
           </div>
-          <div>
+          <div className="w-full sm:w-auto">
             <div className="text-sm text-gray-500 mb-1">组卷计划书</div>
-            <Select placeholder="可选的组卷计划书" style={{ width: 240 }} value={planId} onChange={setPlanId} options={examPlans.map((p) => ({ value: p.id, label: `${p.level}级·${p.type === 'theory' ? '理论' : '技能'}` }))} allowClear />
+            <Select placeholder="可选的组卷计划书" className="w-full sm:w-[240px]" value={planId} onChange={setPlanId} options={examPlans.map((p) => ({ value: p.id, label: `${p.level}级·${p.type === 'theory' ? '理论' : '技能'}` }))} allowClear />
           </div>
-          <div>
+          <div className="w-full sm:w-auto">
             <div className="text-sm text-gray-500 mb-1">技能等级</div>
-            <Select value={level} onChange={setLevel} style={{ width: 120 }} options={['五级', '四级', '三级', '二级', '一级'].map((l) => ({ value: l, label: l }))} />
+            <Select value={level} onChange={setLevel} className="w-full sm:w-[120px]" options={['五级', '四级', '三级', '二级', '一级'].map((l) => ({ value: l, label: l }))} />
           </div>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <Button type="primary" size="large" icon={<FileOutput />} onClick={handleAssemble}>抽题组卷</Button>
           <Button icon={<PrinterOutlined />} onClick={handlePrint} disabled={!paper}>打印试卷</Button>
           <Button onClick={() => setCurrentStep('review')}>题库不足？前往审核</Button>
@@ -149,7 +149,7 @@ export function PaperAssembly() {
         title={paper?.title || '试卷'}
         open={previewOpen}
         onCancel={() => setPreviewOpen(false)}
-        width={1000}
+        width={typeof window !== 'undefined' && window.innerWidth < 768 ? '100%' : 1000}
         footer={
           <div className="flex justify-between w-full">
             <span className="text-gray-500">共 {paper?.questions.length} 题 · 总分 {paper?.totalScore} 分</span>
@@ -162,7 +162,7 @@ export function PaperAssembly() {
       >
         {paper && (
           <div className="max-h-[70vh] overflow-auto pr-2">
-            <Table rowKey="id" size="small" columns={columns} dataSource={paper.questions} pagination={false} />
+            <Table rowKey="id" size="small" columns={columns} dataSource={paper.questions} pagination={false} scroll={{ x: 700 }} />
           </div>
         )}
       </Modal>

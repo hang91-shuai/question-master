@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Card, Table, Tag, Button, Select, message, Modal, Input, Progress, Space } from 'antd';
+import { Card, Table, Tag, Button, Select, message, Modal, Input, Progress } from 'antd';
 import { DownloadOutlined, DatabaseOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { exportToExcel } from '../../utils/fileParser';
@@ -67,15 +67,15 @@ export function ManageBank() {
           <h2 className="text-lg font-bold m-0">四、题库管理</h2>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <Space>
-            <Select placeholder="选择题库" style={{ width: 240 }} value={bankId || currentBank?.id} onChange={setBankId} options={questionBanks.map((b) => ({ value: b.id, label: b.name }))} />
-            <Input prefix={<SearchOutlined />} placeholder="搜索题目 / 考评点" style={{ width: 220 }} value={search} onChange={(e) => setSearch(e.target.value)} allowClear />
-          </Space>
-          <Space>
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            <Select placeholder="选择题库" className="w-full sm:w-[240px]" value={bankId || currentBank?.id} onChange={setBankId} options={questionBanks.map((b) => ({ value: b.id, label: b.name }))} />
+            <Input prefix={<SearchOutlined />} placeholder="搜索题目 / 考评点" className="w-full sm:w-[220px]" value={search} onChange={(e) => setSearch(e.target.value)} allowClear />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             <Button icon={<PlusOutlined />} type="primary" onClick={() => setAddModal(true)}>从 Excel 导入</Button>
             <Button icon={<DownloadOutlined />} onClick={handleExport}>导出 Excel</Button>
             <Button onClick={() => setCurrentStep('review')}>前往在线审核</Button>
-          </Space>
+          </div>
         </div>
 
         {!currentBank ? (

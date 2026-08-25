@@ -215,7 +215,7 @@ export function GenerateQuestions() {
             {dataSource === 'ai' && (
               <div>
                 <div className="text-sm font-medium text-gray-700 mb-2">选择 AI 模型</div>
-                <Select value={aiModel} onChange={setAiModel} style={{ width: 260 }} options={[
+                <Select value={aiModel} onChange={setAiModel} className="w-full max-w-[260px]" options={[
                   { value: 'deepseek', label: 'DeepSeek（推荐）' },
                   { value: 'qwen', label: '通义千问' },
                   { value: 'gpt4', label: 'GPT-4' },
@@ -225,7 +225,7 @@ export function GenerateQuestions() {
 
             <div>
               <div className="text-sm font-medium text-gray-700 mb-2">技能等级</div>
-              <Select value={level} onChange={setLevel} style={{ width: 200 }} options={levels.map((l) => ({ value: l, label: l }))} />
+              <Select value={level} onChange={setLevel} className="w-full max-w-[200px]" options={levels.map((l) => ({ value: l, label: l }))} />
             </div>
 
             <div>
@@ -256,7 +256,7 @@ export function GenerateQuestions() {
 
           <div>
             <div className="text-sm font-medium text-gray-700 mb-2">题型配置</div>
-            <Table size="small" rowKey="type" columns={typeConfigColumns} dataSource={typeConfigs} pagination={false} />
+            <Table size="small" rowKey="type" columns={typeConfigColumns} dataSource={typeConfigs} pagination={false} scroll={{ x: 700 }} />
             <Divider />
             <Button icon={<FileTextOutlined />} onClick={() => setCurrentStep('review')} block>
               生成完成后前往「在线审核」
@@ -274,6 +274,7 @@ export function GenerateQuestions() {
             size="small"
             pagination={false}
             dataSource={recentBanks}
+            scroll={{ x: 600 }}
             columns={[
               { title: '题库名称', dataIndex: 'name', key: 'name' },
               { title: '类型', dataIndex: 'type', key: 'type', width: 100, render: (t: string) => <Tag color={t === 'theory' ? 'blue' : 'purple'}>{t === 'theory' ? '理论' : '技能'}</Tag> },

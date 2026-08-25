@@ -78,6 +78,17 @@ export type StepKey =
   | 'cert'
   | 'practice';
 
+export interface WrongQuestion {
+  id: string;
+  userId: string; // 考生标识（guest/用户名）
+  bankId: string;
+  questionId: string;
+  addedAt: string;
+  source: 'auto' | 'manual'; // auto=答错自动收，manual=手动收藏
+  correctCount?: number; // 错题练习累计答对次数
+  wrongCount?: number; // 累计答错次数
+}
+
 export type UserRole = 'guest' | 'student' | 'admin';
 
 export interface UserAccount {
@@ -103,6 +114,7 @@ export interface AppState {
   examPlans: ExamPlanItem[];
   selectedBankId: string | null;
   profile: PersonalProfile;
+  wrongQuestions: WrongQuestion[];
   setCurrentStep: (step: StepKey) => void;
   setCurrentUser: (role: UserRole, name: string) => void;
   registerAccount: (account: Omit<UserAccount, 'id' | 'createdAt'>) => boolean;
@@ -120,4 +132,7 @@ export interface AppState {
   addExamPlan: (plan: ExamPlanItem) => void;
   setSelectedBankId: (id: string | null) => void;
   updateProfile: (profile: Partial<PersonalProfile>) => void;
+  addWrongQuestion: (entry: { userId: string; bankId: string; questionId: string; source: 'auto' | 'manual' }) => void;
+  removeWrongQuestion: (id: string) => void;
+  bumpWrongStats: (id: string, correct: boolean) => void;
 }

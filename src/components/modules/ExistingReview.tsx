@@ -78,8 +78,8 @@ export function ExistingReview() {
         </div>
         <div className="text-gray-500 text-sm mb-5">上传外部 Excel 细目表和参考教材，对历史 / 第三方题库进行合规性与可溯源审核。</div>
 
-        <Row gutter={16}>
-          <Col span={12}>
+        <Row gutter={[16, 16]}>
+          <Col xs={24} md={12}>
             <Dragger accept=".xlsx,.xls" showUploadList={false} beforeUpload={handleExcelUpload} style={{ borderRadius: 8 }}>
               <p className="ant-upload-drag-icon"><FileExcelOutlined style={{ fontSize: 36, color: '#22c55e' }} /></p>
               <p className="ant-upload-text">上传题库细目表（Excel）</p>
@@ -87,7 +87,7 @@ export function ExistingReview() {
             </Dragger>
             {fileName && <div className="mt-2 text-green-600 text-sm"><CheckCircleOutlined /> {fileName}</div>}
           </Col>
-          <Col span={12}>
+          <Col xs={24} md={12}>
             <Dragger accept=".pdf,.docx,.txt,.md" showUploadList={false} beforeUpload={handleRefUpload} style={{ borderRadius: 8 }}>
               <p className="ant-upload-drag-icon"><BookOutlined style={{ fontSize: 36, color: '#1677ff' }} /></p>
               <p className="ant-upload-text">上传参考教材 / 标准（作为审核依据）</p>
@@ -97,17 +97,17 @@ export function ExistingReview() {
           </Col>
         </Row>
 
-        <div className="mt-5 flex items-center gap-3">
+        <div className="mt-5 flex items-center gap-3 flex-wrap">
           <Button type="primary" icon={<SearchOutlined />} loading={checking} onClick={handleCheck} size="large">
             {checking ? '正在审核现有题库…' : '开始审核现有题库'}
           </Button>
-          {checking && <Progress percent={progress} style={{ width: 240 }} status="active" />}
+          {checking && <Progress percent={progress} style={{ width: '100%', maxWidth: 240 }} status="active" />}
         </div>
       </Card>
 
       {results.length > 0 && (
         <Card>
-          <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-4">
             <Statistic title="审核通过" value={passCount} valueStyle={{ color: '#22c55e' }} />
             <Statistic title="存在问题" value={failCount} valueStyle={{ color: '#ef4444' }} />
             <Statistic title="需要完善" value={warnCount} valueStyle={{ color: '#f59e0b' }} />
@@ -117,6 +117,7 @@ export function ExistingReview() {
             size="small"
             dataSource={results}
             pagination={{ pageSize: 10 }}
+            scroll={{ x: 600 }}
             columns={[
               { title: '题目内容', dataIndex: 'content', ellipsis: true },
               {

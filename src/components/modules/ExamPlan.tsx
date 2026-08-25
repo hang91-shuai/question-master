@@ -82,13 +82,13 @@ export function ExamPlan() {
         <div className="text-gray-500 text-sm mb-5">依据已审核题库，按级别自动生成理论 / 技能组卷计划书，支持导出 Excel 或保存到数据库。</div>
 
         <div className="flex flex-wrap gap-4 items-center mb-4">
-          <div>
+          <div className="w-full sm:w-auto">
             <div className="text-sm text-gray-500 mb-1">技能等级</div>
-            <Select value={level} onChange={setLevel} style={{ width: 140 }} options={['五级', '四级', '三级', '二级', '一级'].map((l) => ({ value: l, label: l }))} />
+            <Select value={level} onChange={setLevel} className="w-full sm:w-[140px]" options={['五级', '四级', '三级', '二级', '一级'].map((l) => ({ value: l, label: l }))} />
           </div>
-          <div>
+          <div className="w-full sm:w-auto">
             <div className="text-sm text-gray-500 mb-1">计划书类型</div>
-            <Select value={planType} onChange={(v) => setPlanType(v)} style={{ width: 140 }} options={[{ value: 'theory', label: '理论组卷' }, { value: 'skill', label: '技能组卷' }]} />
+            <Select value={planType} onChange={(v) => setPlanType(v)} className="w-full sm:w-[140px]" options={[{ value: 'theory', label: '理论组卷' }, { value: 'skill', label: '技能组卷' }]} />
           </div>
         </div>
 
@@ -100,6 +100,7 @@ export function ExamPlan() {
           size="small"
           pagination={false}
           dataSource={typeRows.map((t) => ({ type: t }))}
+          scroll={{ x: 480 }}
           columns={[
             { title: '题型', dataIndex: 'type', key: 'type', render: (t: QuestionType) => typeLabels[t] },
             { title: '单题分值', dataIndex: 'score', key: 'score', render: (_: any, r: any) => <Tag color="blue">{scoreMap[r.type as QuestionType]}</Tag> },
@@ -115,7 +116,7 @@ export function ExamPlan() {
           卷面总分：<b className="text-blue-600 text-lg">{totalScore} 分</b>
         </div>
 
-        <div className="mt-4 flex gap-3">
+        <div className="mt-4 flex flex-wrap gap-3">
           <Button type="primary" icon={<CalendarOutlined />} onClick={handleGenerate}>生成计划书</Button>
           <Button icon={<SaveOutlined />} onClick={handleSave} disabled={!generated}>保存到数据库</Button>
           <Button icon={<DownloadOutlined />} onClick={handleExport} disabled={!generated}>导出 Excel</Button>
@@ -130,6 +131,7 @@ export function ExamPlan() {
             size="small"
             pagination={false}
             dataSource={Object.entries(generated.configs).filter(([, c]) => c > 0).map(([t]) => ({ type: t as QuestionType }))}
+            scroll={{ x: 480 }}
             columns={[
               { title: '题型', dataIndex: 'type', render: (t: QuestionType) => typeLabels[t] },
               { title: '题量', dataIndex: 'type', render: (t: QuestionType) => generated.configs[t] },
@@ -147,6 +149,7 @@ export function ExamPlan() {
             size="small"
             pagination={false}
             dataSource={examPlans}
+            scroll={{ x: 480 }}
             columns={[
               { title: '等级', dataIndex: 'level', width: 80 },
               { title: '类型', dataIndex: 'type', width: 100, render: (t: string) => <Tag color={t === 'theory' ? 'blue' : 'purple'}>{t === 'theory' ? '理论' : '技能'}</Tag> },

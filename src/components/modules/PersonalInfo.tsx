@@ -14,9 +14,9 @@ export function PersonalInfo() {
   return (
     <div className="space-y-5">
       <Card>
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-6 flex-wrap">
           <Avatar size={64} icon={<UserOutlined />} style={{ backgroundColor: '#1677ff' }} />
-          <div>
+          <div className="min-w-0">
             <h2 className="text-lg font-bold m-0">{profile.name}</h2>
             <div className="text-gray-500 text-sm">{profile.org} · {profile.role}</div>
           </div>

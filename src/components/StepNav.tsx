@@ -33,14 +33,39 @@ export function StepNav() {
   return (
     <div className="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
       <div className="max-w-[1440px] mx-auto px-4 py-4">
-        <Steps
-          current={activeIndex}
-          onChange={(index) => setCurrentStep(steps[index].key)}
-          size="small"
-          responsive={false}
-          items={steps.map((s) => ({ title: s.title, icon: s.icon }))}
-          className="step-nav"
-        />
+        {/* 桌面端：完整步骤条 */}
+        <div className="hidden md:block">
+          <Steps
+            current={activeIndex}
+            onChange={(index) => setCurrentStep(steps[index].key)}
+            size="small"
+            responsive={false}
+            items={steps.map((s) => ({ title: s.title, icon: s.icon }))}
+            className="step-nav"
+          />
+        </div>
+        {/* 移动端：可横向滑动的标签条 */}
+        <div className="md:hidden -mx-4 px-4 overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-2 min-w-max">
+            {steps.map((s, index) => {
+              const isActive = index === activeIndex;
+              return (
+                <button
+                  key={s.key}
+                  onClick={() => setCurrentStep(s.key)}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-sm whitespace-nowrap transition-colors shrink-0 ${
+                    isActive
+                      ? 'bg-blue-600 text-white font-medium'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {s.icon}
+                  <span>{s.title}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );

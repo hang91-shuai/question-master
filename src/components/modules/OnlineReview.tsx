@@ -167,15 +167,15 @@ export function OnlineReview() {
           <h2 className="text-lg font-bold m-0">三、在线审核</h2>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
             <Select
               placeholder="选择题库"
-              style={{ width: 260 }}
+              className="w-full sm:w-[260px]"
               value={selectedBankId || (questionBanks[questionBanks.length - 1]?.id)}
               onChange={setSelectedBankId}
               options={questionBanks.map((b) => ({ value: b.id, label: b.name }))}
             />
-            <Radio.Group value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} size="small">
+            <Radio.Group value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} size="small" className="flex flex-wrap">
               <Radio.Button value="all">全部</Radio.Button>
               <Radio.Button value="pending">待审核</Radio.Button>
               <Radio.Button value="approved">已通过</Radio.Button>
@@ -197,24 +197,24 @@ export function OnlineReview() {
           <div className="text-center text-gray-400 py-10">暂无题库，请先「生成题库」</div>
         ) : (
           <>
-            <div className="grid grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 mb-4">
               <Badge.Ribbon text="总数" color="blue">
-                <div className="border border-gray-200 rounded-lg p-3 bg-blue-50 text-center">
-                  <div className="text-2xl font-bold text-blue-600">{s.total}</div>
-                  <div className="text-gray-500 text-sm">题目总数</div>
+                <div className="border border-gray-200 rounded-lg p-2 sm:p-3 bg-blue-50 text-center">
+                  <div className="text-xl sm:text-2xl font-bold text-blue-600">{s.total}</div>
+                  <div className="text-gray-500 text-xs sm:text-sm">题目总数</div>
                 </div>
               </Badge.Ribbon>
-              <div className="border border-green-200 rounded-lg p-3 bg-green-50 text-center">
-                <div className="text-2xl font-bold text-green-600">{s.approved}</div>
-                <div className="text-gray-500 text-sm">已通过</div>
+              <div className="border border-green-200 rounded-lg p-2 sm:p-3 bg-green-50 text-center">
+                <div className="text-xl sm:text-2xl font-bold text-green-600">{s.approved}</div>
+                <div className="text-gray-500 text-xs sm:text-sm">已通过</div>
               </div>
-              <div className="border border-orange-200 rounded-lg p-3 bg-orange-50 text-center">
-                <div className="text-2xl font-bold text-orange-500">{s.pending}</div>
-                <div className="text-gray-500 text-sm">待审核</div>
+              <div className="border border-orange-200 rounded-lg p-2 sm:p-3 bg-orange-50 text-center">
+                <div className="text-xl sm:text-2xl font-bold text-orange-500">{s.pending}</div>
+                <div className="text-gray-500 text-xs sm:text-sm">待审核</div>
               </div>
-              <div className="border border-red-200 rounded-lg p-3 bg-red-50 text-center">
-                <div className="text-2xl font-bold text-red-500">{s.rejected}</div>
-                <div className="text-gray-500 text-sm">已驳回</div>
+              <div className="border border-red-200 rounded-lg p-2 sm:p-3 bg-red-50 text-center">
+                <div className="text-xl sm:text-2xl font-bold text-red-500">{s.rejected}</div>
+                <div className="text-gray-500 text-xs sm:text-sm">已驳回</div>
               </div>
             </div>
             <Table
