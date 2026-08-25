@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Card, Button, Upload, Select, message, Table, Tag, Progress, Typography, Empty } from 'antd';
-import { FilePdfOutlined, BookOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Card, Button, Upload, Select, message, Table, Tag, Progress, Typography, Empty, Input, Radio } from 'antd';
+import { FilePdfOutlined, BookOutlined, ThunderboltOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { parseFile } from '../../utils/fileParser';
-import { generateOutlineFromText } from '../../utils/mockAI';
+import { generateOutlineFromText, parseOutlineList } from '../../utils/mockAI';
 import type { FileItem } from '../../types';
 import { CheckCircle, AlertCircle } from 'lucide-react';
 
@@ -47,11 +47,29 @@ export function ImportStandard() {
     addMaterialFile,
     updateFileStatus,
     setOutlineItems,
+    mergeOutlineItems,
     setCurrentStep,
   } = useAppStore();
 
   const [parsing, setParsing] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [pastedOutline, setPastedOutline] = useState('');
+  const [outlineMergeMode, setOutlineMergeMode] = useState<'overwrite' | 'merge'>('overwrite');
+
+  const handlePasteOutline = () => {
+    const items = parseOutlineList(pastedOutline);
+    if (items.length === 0) {
+      message.warning('未识别到有效知识点，请检查粘贴格式');
+      return;
+    }
+    if (outlineMergeMode === 'merge') {
+      mergeOutlineItems(items);
+      message.success(`已合并 ${items.length} 个知识点主题，现有大纲已保留`);
+    } else {
+      setOutlineItems(items);
+      message.success(`已导入 ${items.length} 个知识点主题，覆盖现有大纲`);
+    }
+  };
 
   const handleStandardUpload = async (file: File) => {
     const ext = getExt(file.name);
@@ -227,6 +245,55 @@ export function ImportStandard() {
             scroll={{ x: 480 }}
           />
         )}
+      </Card>
+
+      <Card
+        style={{ borderColor: '#b7eb8f' }}
+        title={
+          <span>
+            <FileTextOutlined className="mr-2 text-green-600" />
+            快捷方式：整本知识点清单
+          </span>
+        }
+        extra={<Tag color="green">不依赖上传文件</Tag>}
+      >
+        <Paragraph type="secondary" className="mb-3">
+          不想上传整本教材时，可直接把整本书提炼出的<strong>知识点大纲</strong>粘贴到下方，系统会按知识点自动生成题库。
+          每行一个知识点主题，格式示例：
+          <code className="block mt-1 text-xs bg-gray-100 px-2 py-1 rounded text-gray-600">
+            01 数字化管理概述：数字化转型定义；数字经济发展背景；管理变革趋势
+          </code>
+        </Paragraph>
+        <Input.TextArea
+          rows={6}
+          placeholder={'01 数字化管理概述：数字化转型定义；数字经济发展背景；管理变革趋势\n02 数字化组织管理：组织架构设计；组织机制；人员数字化管理'}
+          value={pastedOutline}
+          onChange={(e) => setPastedOutline(e.target.value)}
+        />
+        <div className="mt-3 flex flex-col gap-3">
+          <Radio.Group
+            value={outlineMergeMode}
+            onChange={(e) => setOutlineMergeMode(e.target.value)}
+            size="small"
+          >
+            <Radio value="overwrite">覆盖导入（替换现有大纲）</Radio>
+            <Radio value="merge">合并导入（追加到现有大纲）</Radio>
+          </Radio.Group>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="primary"
+              icon={<FileTextOutlined />}
+              onClick={handlePasteOutline}
+            >
+              解析并导入大纲
+            </Button>
+            <span className="text-xs text-gray-400">
+              {outlineMergeMode === 'merge'
+                ? '与已有 PDF / 国家标准解析出的大纲共同使用，生成题目时综合参考'
+                : '替换当前大纲，适合只想按这份清单出题的场景'}
+            </span>
+          </div>
+        </div>
       </Card>
 
       <Card>

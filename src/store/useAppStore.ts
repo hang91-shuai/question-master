@@ -75,6 +75,13 @@ export const useAppStore = create<AppState>()(
 
       setOutlineItems: (items: OutlineItem[]) => set({ outlineItems: items }),
 
+      mergeOutlineItems: (items: OutlineItem[]) =>
+        set((state) => {
+          const existingCodes = new Set(state.outlineItems.map((o) => o.code));
+          const newItems = items.filter((o) => !existingCodes.has(o.code));
+          return { outlineItems: [...state.outlineItems, ...newItems] };
+        }),
+
       setAiModel: (model: string) => set({ aiModel: model }),
 
       setSkillType: (type: string) => set({ skillType: type }),

@@ -123,6 +123,7 @@ export interface AppState {
   addMaterialFile: (file: FileItem) => void;
   updateFileStatus: (id: string, status: FileItem['status'], content?: string) => void;
   setOutlineItems: (items: OutlineItem[]) => void;
+  mergeOutlineItems: (items: OutlineItem[]) => void;
   setAiModel: (model: string) => void;
   setSkillType: (type: string) => void;
   addQuestionBank: (bank: QuestionBank) => void;

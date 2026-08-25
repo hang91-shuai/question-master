@@ -13,11 +13,15 @@ export function isAIConfigured(): boolean {
   return Boolean(BASE_URL && API_KEY);
 }
 
+const MAX_MATERIAL_LENGTH = 4000;
+
 export function buildPrompt(
   outlineItems: OutlineItem[],
   bankType: 'theory' | 'skill',
   level: string,
-  typeConfigs: TypeConfig[]
+  typeConfigs: TypeConfig[],
+  existingQuestions?: Array<{ content: string; outlineName?: string; type?: string }>,
+  materialText?: string
 ): string {
   const typeLabels: Record<QuestionType, string> = {
     single: '单选',
@@ -40,6 +44,31 @@ export function buildPrompt(
     .map((c) => `- ${typeLabels[c.type]}：${c.count}道，难度${c.difficulty}，分值${c.score}`)
     .join('\n');
 
+  // 去重清单：把已有题目压缩成"知识点 + 题干"单行，避免重复出题
+  const dedupText = existingQuestions && existingQuestions.length > 0
+    ? existingQuestions
+        .map((q) => {
+          const tag = q.outlineName ? `【${q.outlineName}】` : '';
+          const head = q.content.replace(/\s+/g, ' ').slice(0, 30);
+          return `- ${tag}${head}`;
+        })
+        .join('\n')
+    : '';
+
+  const dedupSection = dedupText
+    ? `\n【已出题目·请避开以下知识点，不要重复出相似题】
+${dedupText}
+`
+    : '';
+
+  const trimmedMaterial = materialText && materialText.trim().length > 0
+    ? materialText.trim().slice(0, MAX_MATERIAL_LENGTH)
+    : '';
+
+  const materialSection = trimmedMaterial
+    ? `\n【教材原文参考·请严格依据以下内容出题，不要超纲】\n${trimmedMaterial}${materialText!.length > MAX_MATERIAL_LENGTH ? '\n（教材内容较长，以上为前段参考）' : ''}\n`
+    : '\n【教材依据】\n依据职业技能等级认定指定教材出题，严格依托教材原文，不超纲、不臆造。\n';
+
   return `你是一位职业技能鉴定命题专家。请严格根据以下要求生成规范的职业技能等级认定题库题目。
 
 【题库类型】${bankType === 'theory' ? '理论题库' : '技能题库'}
@@ -47,10 +76,7 @@ export function buildPrompt(
 
 【职业功能大纲】
 ${outlineText}
-
-【教材依据】
-依据职业技能等级认定指定教材出题，严格依托教材原文，不超纲、不臆造。
-
+${materialSection}${dedupSection}
 【题型配置】只生成以下题型，且严格按照数量生成：
 ${configText}
 
@@ -79,14 +105,16 @@ export async function generateQuestionsByAI(
   bankType: 'theory' | 'skill',
   level: string,
   modelKey: string,
-  typeConfigs: TypeConfig[]
+  typeConfigs: TypeConfig[],
+  existingQuestions?: Array<{ content: string; outlineName?: string; type?: string }>,
+  materialText?: string
 ): Promise<Question[]> {
   if (!isAIConfigured()) {
     throw new Error('AI API 未配置，请在 .env.local 中设置 VITE_AI_API_BASE_URL 和 VITE_AI_API_KEY');
   }
 
   const model = MODEL_MAP[modelKey] || modelKey;
-  const prompt = buildPrompt(outlineItems, bankType, level, typeConfigs);
+  const prompt = buildPrompt(outlineItems, bankType, level, typeConfigs, existingQuestions, materialText);
 
   const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: 'POST',

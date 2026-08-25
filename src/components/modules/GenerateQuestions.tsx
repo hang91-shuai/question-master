@@ -21,8 +21,37 @@ const typeLabels: Record<QuestionType, string> = {
 
 const levels = ['五级', '四级', '三级', '二级', '一级'];
 
+/** 预设题型模板：按题库类型提供一键套用的题量配置 */
+const presetTemplates: Record<
+  'theory' | 'skill',
+  { key: string; label: string; desc: string; counts: Partial<Record<QuestionType, number>> }[]
+> = {
+  theory: [
+    { key: 'standard', label: '初级认证·标准', desc: '单选192 + 多选64 + 判断64（共320题）', counts: { single: 192, multiple: 64, judge: 64 } },
+    { key: 'lite', label: '初级认证·精简', desc: '单选96 + 多选32 + 判断32（共160题）', counts: { single: 96, multiple: 32, judge: 32 } },
+    { key: 'demo', label: '入门体验', desc: '单选10 + 判断10（共20题）', counts: { single: 10, judge: 10 } },
+  ],
+  skill: [
+    { key: 'standard', label: '案例技能·标准', desc: '案例10 + 计算5 + 单选20 + 判断10（共45题）', counts: { case: 10, calc: 5, single: 20, judge: 10 } },
+    { key: 'demo', label: '入门体验', desc: '案例2 + 单选5 + 判断3（共10题）', counts: { case: 2, single: 5, judge: 3 } },
+  ],
+};
+
+function buildConfigs(bankType: 'theory' | 'skill', counts: Partial<Record<QuestionType, number>>): TypeConfig[] {
+  const types = bankType === 'theory'
+    ? (['single', 'multiple', 'judge', 'short', 'essay', 'blank'] as QuestionType[])
+    : (['case', 'calc', 'single', 'judge'] as QuestionType[]);
+  return types.map((t) => ({
+    type: t,
+    count: counts[t] ?? 0,
+    score: 2,
+    difficulty: 0.5,
+    ratio: counts[t] ? 30 : 0,
+  }));
+}
+
 export function GenerateQuestions() {
-  const { outlineItems, questionBanks, addQuestionBank, setCurrentStep } = useAppStore();
+  const { outlineItems, materialFiles, questionBanks, addQuestionBank, setCurrentStep } = useAppStore();
 
   const [bankType, setBankType] = useState<'theory' | 'skill'>('theory');
   const [dataSource, setDataSource] = useState<'standard' | 'ai'>('standard');
@@ -44,6 +73,15 @@ export function GenerateQuestions() {
   }));
 
   const [typeConfigs, setTypeConfigs] = useState<TypeConfig[]>(initialConfigs);
+  const [presetKey, setPresetKey] = useState<string>('standard');
+
+  const applyTemplate = (key: string) => {
+    setPresetKey(key);
+    const template = presetTemplates[bankType].find((t) => t.key === key);
+    if (!template) return;
+    setTypeConfigs(buildConfigs(bankType, template.counts));
+    message.success(`已套用模板「${template.label}」`);
+  };
 
   const totalCount = useMemo(
     () => typeConfigs.reduce((sum, c) => sum + (c.count || 0), 0),
@@ -51,15 +89,11 @@ export function GenerateQuestions() {
   );
 
   useEffect(() => {
-    setTypeConfigs(
-      (bankType === 'theory' ? defaultTheoryTypes : defaultSkillTypes).map<TypeConfig>((t) => ({
-        type: t,
-        count: ['single', 'multiple', 'judge'].includes(t) ? 10 : 0,
-        score: 2,
-        difficulty: 0.5,
-        ratio: ['single', 'multiple', 'judge'].includes(t) ? 30 : 0,
-      }))
-    );
+    // 切换题库类型时，套用当前预设模板（若该类型下不存在该 key，则回退到第一个模板）
+    const templates = presetTemplates[bankType];
+    const matched = templates.find((t) => t.key === presetKey) || templates[0];
+    setPresetKey(matched.key);
+    setTypeConfigs(buildConfigs(bankType, matched.counts));
   }, [bankType]);
 
   const updateTypeConfig = (type: QuestionType, key: keyof TypeConfig, value: number) => {
@@ -96,7 +130,18 @@ export function GenerateQuestions() {
 
     try {
       const useAI = dataSource === 'ai';
-      const bank = await createQuestionBank(name, bankType, outlineItems, level, useAI, typeConfigs, aiModel);
+      // 收集已有题目，供 AI 生成时避开重复考点
+      const existing = questionBanks.flatMap((b) => b.questions).slice(-300).map((q) => ({
+        content: q.content,
+        outlineName: q.outlineName,
+        type: q.type,
+      }));
+      // 收集已解析的教材 / 资料内容，作为 AI 出题的参考依据
+      const materialText = materialFiles
+        .filter((f) => f.status === 'done' && f.content)
+        .map((f) => `【${f.name}】\n${f.content}`)
+        .join('\n\n');
+      const bank = await createQuestionBank(name, bankType, outlineItems, level, useAI, typeConfigs, aiModel, existing, materialText);
       addQuestionBank(bank);
       clearInterval(progressTimer);
       setProgress(100);
@@ -255,7 +300,22 @@ export function GenerateQuestions() {
           </div>
 
           <div>
-            <div className="text-sm font-medium text-gray-700 mb-2">题型配置</div>
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+              <div className="text-sm font-medium text-gray-700">题型配置</div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">预设模板：</span>
+                <Select
+                  value={presetKey}
+                  onChange={applyTemplate}
+                  className="w-[180px]"
+                  size="small"
+                  options={presetTemplates[bankType].map((t) => ({ value: t.key, label: t.label }))}
+                />
+              </div>
+            </div>
+            <div className="mb-2 text-xs text-gray-400">
+              {presetTemplates[bankType].find((t) => t.key === presetKey)?.desc}
+            </div>
             <Table size="small" rowKey="type" columns={typeConfigColumns} dataSource={typeConfigs} pagination={false} scroll={{ x: 700 }} />
             <Divider />
             <Button icon={<FileTextOutlined />} onClick={() => setCurrentStep('review')} block>

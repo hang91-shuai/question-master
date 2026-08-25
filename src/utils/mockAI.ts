@@ -49,6 +49,57 @@ const optionsPool = [
   ['规范流程', '强化培训', '监督管理', '忽视细节'],
 ];
 
+/**
+ * 将用户手动粘贴的"整本知识点清单"解析为标准大纲结构。
+ * 支持格式（每行一个知识点主题）：
+ *   01 数字化管理概述：数字化转型定义；数字经济发展背景；管理变革趋势
+ *   02 数字化组织管理：组织架构设计；组织机制；人员数字化管理
+ * 也支持不带编号：数字化管理概述：考点1；考点2
+ * 以及不带冒号考点：仅一个主题名
+ */
+export function parseOutlineList(text: string): OutlineItem[] {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  const items: OutlineItem[] = [];
+  let fallback = 1;
+
+  for (const line of lines) {
+    // 去掉行首编号，如 "01 "、"1."、"01、"
+    let content = line.replace(/^\s*\d+[\.、:：)）]?\s*/, '').trim();
+    if (!content) continue;
+
+    // 拆出主题名与考点（以中英文冒号或分号分隔）
+    const sepIndex = content.search(/[:：;；]/);
+    let name = content;
+    let points: string[] = [];
+
+    if (sepIndex !== -1) {
+      name = content.slice(0, sepIndex).trim();
+      const rest = content.slice(sepIndex + 1).trim();
+      points = rest
+        .split(/[;；]/)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+    }
+
+    if (!name) continue;
+    const weight = Math.max(1, Math.round(100 / Math.max(items.length + 1, 1)));
+    items.push({
+      id: genId(),
+      code: `X.${String(fallback++).padStart(2, '0')}`,
+      name: name.slice(0, 40),
+      level: '五级',
+      weight,
+      points: points.length > 0 ? points : [`掌握${name}基本原理`, `能够完成${name}基础操作`],
+    });
+  }
+
+  return items;
+}
+
 export function generateOutlineFromText(text: string): OutlineItem[] {
   const lines = text
     .split('\n')
@@ -132,7 +183,9 @@ export async function generateQuestions(
   level: string,
   useAI: boolean,
   typeConfigs: TypeConfig[],
-  modelKey: string = 'deepseek'
+  modelKey: string = 'deepseek',
+  existingQuestions?: Array<{ content: string; outlineName?: string; type?: string }>,
+  materialText?: string
 ): Promise<Question[]> {
   const activeConfigs = typeConfigs.filter((c) => c.count > 0);
 
@@ -144,7 +197,7 @@ export async function generateQuestions(
     if (!isAIConfigured()) {
       throw new Error('AI API 未配置，请在 .env.local 中设置 VITE_AI_API_BASE_URL 和 VITE_AI_API_KEY');
     }
-    return generateQuestionsByAI(outlineItems, type, level, modelKey, activeConfigs);
+    return generateQuestionsByAI(outlineItems, type, level, modelKey, activeConfigs, existingQuestions, materialText);
   }
 
   const questions: Question[] = [];
@@ -168,9 +221,11 @@ export async function createQuestionBank(
   level: string,
   useAI: boolean,
   typeConfigs: TypeConfig[],
-  modelKey: string = 'deepseek'
+  modelKey: string = 'deepseek',
+  existingQuestions?: Array<{ content: string; outlineName?: string; type?: string }>,
+  materialText?: string
 ): Promise<QuestionBank> {
-  const questions = await generateQuestions(outlineItems, type, level, useAI, typeConfigs, modelKey);
+  const questions = await generateQuestions(outlineItems, type, level, useAI, typeConfigs, modelKey, existingQuestions, materialText);
   return {
     id: genId(),
     name,
