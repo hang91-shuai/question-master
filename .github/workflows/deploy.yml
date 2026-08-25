@@ -34,8 +34,8 @@ jobs:
 
       - name: Build
         env:
-          # 云端题库共享（HTTP 云函数代理，绕开 CORS）
-          VITE_CLOUDBASE_PROXY_URL: ${{ secrets.VITE_CLOUDBASE_PROXY_URL }}
+          # 云端题库共享（HTTP 云函数代理，绕开 CORS）。此地址不含密钥，直接写死避免每次配置 secret
+          VITE_CLOUDBASE_PROXY_URL: https://hang-91-d5g44hojk64d3da49-1474804677.ap-shanghai.app.tcloudbase.com/api
           # AI API（可选）
           VITE_AI_API_BASE_URL: ${{ secrets.VITE_AI_API_BASE_URL }}
           VITE_AI_API_KEY: ${{ secrets.VITE_AI_API_KEY }}
