@@ -1,11 +1,8 @@
-import type { OutlineItem, Question, QuestionType, QuestionBank } from '../types';
+import type { OutlineItem, Question, QuestionType, QuestionBank, TypeConfig } from '../types';
+import { generateQuestionsByAI, isAIConfigured } from '../services/aiApi';
 
-// 简单自增 id
 let idCounter = 0;
 const genId = () => `id_${Date.now()}_${++idCounter}`;
-
-const THEORY_TYPES: QuestionType[] = ['single', 'multiple', 'judge', 'short', 'essay', 'blank'];
-const SKILL_TYPES: QuestionType[] = ['case', 'calc', 'single', 'judge'];
 
 const theoryTemplates: Record<string, string[]> = {
   single: [
@@ -95,53 +92,85 @@ function randomPick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-export function generateQuestions(
+function randomDifficulty(coefficient: number): 'easy' | 'medium' | 'hard' {
+  if (coefficient <= 0.4) return 'easy';
+  if (coefficient >= 0.7) return 'hard';
+  return 'medium';
+}
+
+function generateLocalQuestion(
+  outline: OutlineItem,
+  qType: QuestionType,
+  level: string,
+  difficulty: number
+): Question {
+  const templates = { ...theoryTemplates, ...skillTemplates };
+  const templateList = templates[qType] || theoryTemplates[qType] || ['请回答关于{name}的问题。'];
+  const content = fillTemplate(randomPick(templateList), outline.name);
+  const options = qType === 'single' || qType === 'multiple' ? randomPick(optionsPool) : undefined;
+  const answer = qType === 'judge' ? (Math.random() > 0.5 ? '正确' : '错误') : '略';
+
+  return {
+    id: genId(),
+    type: qType,
+    level,
+    outlineCode: outline.code,
+    outlineName: outline.name,
+    content,
+    options,
+    answer,
+    analysis: `基于${outline.name}（${outline.code}）考评点生成本地示例题。`,
+    difficulty: randomDifficulty(difficulty),
+    source: '本地规则生成',
+    status: 'pending',
+  };
+}
+
+export async function generateQuestions(
   outlineItems: OutlineItem[],
   type: 'theory' | 'skill',
-  total: number,
   level: string,
-  useAI: boolean
-): Question[] {
+  useAI: boolean,
+  typeConfigs: TypeConfig[],
+  modelKey: string = 'deepseek'
+): Promise<Question[]> {
+  const activeConfigs = typeConfigs.filter((c) => c.count > 0);
+
+  if (activeConfigs.length === 0) {
+    return [];
+  }
+
+  if (useAI) {
+    if (!isAIConfigured()) {
+      throw new Error('AI API 未配置，请在 .env.local 中设置 VITE_AI_API_BASE_URL 和 VITE_AI_API_KEY');
+    }
+    return generateQuestionsByAI(outlineItems, type, level, modelKey, activeConfigs);
+  }
+
   const questions: Question[] = [];
-  const types = type === 'theory' ? THEORY_TYPES : SKILL_TYPES;
-  const templates = type === 'theory' ? theoryTemplates : { ...theoryTemplates, ...skillTemplates };
+  let outlineIndex = 0;
 
-  for (let i = 0; i < total; i++) {
-    const outline = outlineItems[i % outlineItems.length];
-    const qType = randomPick(types);
-    const templateList = templates[qType] || theoryTemplates[qType] || ['请回答关于{name}的问题。'];
-    const content = fillTemplate(randomPick(templateList), outline.name);
-    const options = qType === 'single' || qType === 'multiple' ? randomPick(optionsPool) : undefined;
-    const answer = qType === 'judge' ? (Math.random() > 0.5 ? '正确' : '错误') : '略';
-
-    questions.push({
-      id: genId(),
-      type: qType,
-      level,
-      outlineCode: outline.code,
-      outlineName: outline.name,
-      content,
-      options,
-      answer,
-      analysis: useAI ? `基于${outline.name}和${outline.code}考评点生成。` : '无',
-      difficulty: randomPick(['easy', 'medium', 'hard']),
-      source: useAI ? 'AI 大模型生成' : '本地规则生成',
-      status: 'pending',
-    });
+  for (const config of activeConfigs) {
+    for (let i = 0; i < config.count; i++) {
+      const outline = outlineItems[outlineIndex % outlineItems.length];
+      questions.push(generateLocalQuestion(outline, config.type, level, config.difficulty));
+      outlineIndex++;
+    }
   }
 
   return questions;
 }
 
-export function createQuestionBank(
+export async function createQuestionBank(
   name: string,
   type: 'theory' | 'skill',
   outlineItems: OutlineItem[],
-  total: number,
   level: string,
-  useAI: boolean
-): QuestionBank {
-  const questions = generateQuestions(outlineItems, type, total, level, useAI);
+  useAI: boolean,
+  typeConfigs: TypeConfig[],
+  modelKey: string = 'deepseek'
+): Promise<QuestionBank> {
+  const questions = await generateQuestions(outlineItems, type, level, useAI, typeConfigs, modelKey);
   return {
     id: genId(),
     name,

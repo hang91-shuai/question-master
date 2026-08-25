@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { Card, Radio, Button, InputNumber, Select, message, Table, Tag, Progress, Empty, Divider } from 'antd';
+import { useState, useEffect, useMemo } from 'react';
+import { Card, Radio, Button, InputNumber, Select, message, Table, Tag, Progress, Empty, Divider, Input } from 'antd';
 import { ThunderboltOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { createQuestionBank } from '../../utils/mockAI';
-import type { QuestionType } from '../../types';
+import { isAIConfigured } from '../../services/aiApi';
+import type { QuestionType, TypeConfig } from '../../types';
 import { Sparkles, HardDrive } from 'lucide-react';
 
 const typeLabels: Record<QuestionType, string> = {
@@ -27,51 +28,156 @@ export function GenerateQuestions() {
   const [dataSource, setDataSource] = useState<'standard' | 'ai'>('standard');
   const [aiModel, setAiModel] = useState('deepseek');
   const [level, setLevel] = useState('五级');
-  const [quantity, setQuantity] = useState(50);
+  const [bankName, setBankName] = useState('');
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
 
-  const handleGenerate = () => {
+  const defaultTheoryTypes: QuestionType[] = ['single', 'multiple', 'judge', 'short', 'essay', 'blank'];
+  const defaultSkillTypes: QuestionType[] = ['case', 'calc', 'single', 'judge'];
+
+  const initialConfigs = (bankType === 'theory' ? defaultTheoryTypes : defaultSkillTypes).map<TypeConfig>((t) => ({
+    type: t,
+    count: t === 'single' || t === 'multiple' || t === 'judge' ? 10 : 0,
+    score: 2,
+    difficulty: 0.5,
+    ratio: t === 'single' || t === 'multiple' || t === 'judge' ? 30 : 0,
+  }));
+
+  const [typeConfigs, setTypeConfigs] = useState<TypeConfig[]>(initialConfigs);
+
+  const totalCount = useMemo(
+    () => typeConfigs.reduce((sum, c) => sum + (c.count || 0), 0),
+    [typeConfigs]
+  );
+
+  useEffect(() => {
+    setTypeConfigs(
+      (bankType === 'theory' ? defaultTheoryTypes : defaultSkillTypes).map<TypeConfig>((t) => ({
+        type: t,
+        count: ['single', 'multiple', 'judge'].includes(t) ? 10 : 0,
+        score: 2,
+        difficulty: 0.5,
+        ratio: ['single', 'multiple', 'judge'].includes(t) ? 30 : 0,
+      }))
+    );
+  }, [bankType]);
+
+  const updateTypeConfig = (type: QuestionType, key: keyof TypeConfig, value: number) => {
+    setTypeConfigs((prev) =>
+      prev.map((c) => (c.type === type ? { ...c, [key]: value } : c))
+    );
+  };
+
+  const handleGenerate = async () => {
     if (outlineItems.length === 0) {
       message.warning('请先在「导入标准」步骤中解析职业功能大纲');
       return;
     }
+
+    const activeConfigs = typeConfigs.filter((c) => c.count > 0);
+    if (activeConfigs.length === 0) {
+      message.warning('请至少配置一种题型的题量大于 0');
+      return;
+    }
+
+    if (dataSource === 'ai' && !isAIConfigured()) {
+      message.error('使用 AI 生成需先配置 API：请在项目根目录 .env.local 中设置 VITE_AI_API_BASE_URL 和 VITE_AI_API_KEY');
+      return;
+    }
+
+    const name = bankName.trim() || `${bankType === 'theory' ? '理论' : '技能'}题库·${level}`;
+
     setGenerating(true);
     setProgress(0);
-    const timer = setInterval(() => {
-      setProgress((p) => {
-        if (p >= 100) {
-          clearInterval(timer);
-          const useAI = dataSource === 'ai';
-          const bank = createQuestionBank(
-            `${bankType === 'theory' ? '理论' : '技能'}题库·${level}`,
-            bankType,
-            outlineItems,
-            quantity,
-            level,
-            useAI
-          );
-          addQuestionBank(bank);
-          message.success(`已生成「${bank.name}」，共 ${bank.questionCount} 道题`);
-          setGenerating(false);
-          return 100;
-        }
-        return p + 8;
-      });
-    }, 100);
+
+    const progressTimer = setInterval(() => {
+      setProgress((p) => (p >= 90 ? 90 : p + Math.floor(Math.random() * 10) + 5));
+    }, 300);
+
+    try {
+      const useAI = dataSource === 'ai';
+      const bank = await createQuestionBank(name, bankType, outlineItems, level, useAI, typeConfigs, aiModel);
+      addQuestionBank(bank);
+      clearInterval(progressTimer);
+      setProgress(100);
+      message.success(`已生成「${bank.name}」，共 ${bank.questionCount} 道题`);
+    } catch (err: any) {
+      clearInterval(progressTimer);
+      message.error(err.message || '生成失败，请检查配置后重试');
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const typeConfigColumns = [
     { title: '题型', dataIndex: 'type', key: 'type', width: 120, render: (t: QuestionType) => typeLabels[t] || t },
-    { title: '难度系数', dataIndex: 'diff', key: 'diff', width: 160, render: () => <InputNumber min={0.3} max={0.9} step={0.1} defaultValue={0.5} style={{ width: 110 }} size="small" /> },
-    { title: '单题分值', dataIndex: 'score', key: 'score', width: 140, render: () => <InputNumber min={1} max={10} defaultValue={2} style={{ width: 100 }} size="small" /> },
-    { title: '题量', dataIndex: 'count', key: 'count', width: 130, render: () => <InputNumber min={0} max={100} defaultValue={10} style={{ width: 90 }} size="small" /> },
-    { title: '命题比例', dataIndex: 'ratio', key: 'ratio', width: 160, render: () => <InputNumber min={0} max={100} defaultValue={30} addonAfter="%" style={{ width: 130 }} size="small" /> },
+    {
+      title: '难度系数',
+      dataIndex: 'difficulty',
+      key: 'difficulty',
+      width: 160,
+      render: (_: unknown, record: TypeConfig) => (
+        <InputNumber
+          min={0.3}
+          max={0.9}
+          step={0.1}
+          value={record.difficulty}
+          style={{ width: 110 }}
+          size="small"
+          onChange={(v) => updateTypeConfig(record.type, 'difficulty', v ?? 0.5)}
+        />
+      ),
+    },
+    {
+      title: '单题分值',
+      dataIndex: 'score',
+      key: 'score',
+      width: 140,
+      render: (_: unknown, record: TypeConfig) => (
+        <InputNumber
+          min={1}
+          max={10}
+          value={record.score}
+          style={{ width: 100 }}
+          size="small"
+          onChange={(v) => updateTypeConfig(record.type, 'score', v ?? 2)}
+        />
+      ),
+    },
+    {
+      title: '题量',
+      dataIndex: 'count',
+      key: 'count',
+      width: 130,
+      render: (_: unknown, record: TypeConfig) => (
+        <InputNumber
+          min={0}
+          max={100}
+          value={record.count}
+          style={{ width: 90 }}
+          size="small"
+          onChange={(v) => updateTypeConfig(record.type, 'count', v ?? 0)}
+        />
+      ),
+    },
+    {
+      title: '命题比例',
+      dataIndex: 'ratio',
+      key: 'ratio',
+      width: 160,
+      render: (_: unknown, record: TypeConfig) => (
+        <InputNumber
+          min={0}
+          max={100}
+          value={record.ratio}
+          addonAfter="%"
+          style={{ width: 130 }}
+          size="small"
+          onChange={(v) => updateTypeConfig(record.type, 'ratio', v ?? 0)}
+        />
+      ),
+    },
   ];
-
-  const typeRows = (bankType === 'theory' ? ['single', 'multiple', 'judge', 'short', 'essay', 'blank'] : ['case', 'calc', 'single', 'judge']).map((t) => ({
-    type: t,
-  }));
 
   const recentBanks = questionBanks.slice(-5).reverse();
 
@@ -123,8 +229,23 @@ export function GenerateQuestions() {
             </div>
 
             <div>
+              <div className="text-sm font-medium text-gray-700 mb-2">题库名称</div>
+              <Input
+                placeholder="如：2026年五级茶艺师理论题库"
+                value={bankName}
+                onChange={(e) => setBankName(e.target.value)}
+                style={{ width: '100%' }}
+                maxLength={60}
+                showCount
+              />
+            </div>
+
+            <div>
               <div className="text-sm font-medium text-gray-700 mb-2">生成题量</div>
-              <InputNumber min={1} max={500} value={quantity} onChange={(v) => setQuantity(v || 10)} style={{ width: 200 }} addonAfter="道" />
+              <div className="text-2xl font-bold text-blue-600">
+                {totalCount}<span className="text-sm font-normal text-gray-500 ml-1">道</span>
+              </div>
+              <div className="text-gray-400 text-xs mt-1">由下方题型配置自动汇总</div>
             </div>
 
             <Button type="primary" size="large" icon={<ThunderboltOutlined />} loading={generating} onClick={handleGenerate} block>
@@ -135,7 +256,7 @@ export function GenerateQuestions() {
 
           <div>
             <div className="text-sm font-medium text-gray-700 mb-2">题型配置</div>
-            <Table size="small" rowKey="type" columns={typeConfigColumns} dataSource={typeRows} pagination={false} />
+            <Table size="small" rowKey="type" columns={typeConfigColumns} dataSource={typeConfigs} pagination={false} />
             <Divider />
             <Button icon={<FileTextOutlined />} onClick={() => setCurrentStep('review')} block>
               生成完成后前往「在线审核」

@@ -2,7 +2,8 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
+  # 允许手动触发
   workflow_dispatch:
 
 permissions:
@@ -26,11 +27,18 @@ jobs:
         with:
           node-version: 20
           cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build
+        env:
+          # CloudBase 环境 ID 从 GitHub Secrets 注入
+          VITE_CLOUDBASE_ENV_ID: ${{ secrets.VITE_CLOUDBASE_ENV_ID }}
+          # AI API（可选）
+          VITE_AI_API_BASE_URL: ${{ secrets.VITE_AI_API_BASE_URL }}
+          VITE_AI_API_KEY: ${{ secrets.VITE_AI_API_KEY }}
         run: npm run build
 
       - name: Setup Pages

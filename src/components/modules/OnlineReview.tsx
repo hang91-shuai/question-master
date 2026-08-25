@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Card, Select, Table, Tag, Button, Radio, Input, message, Modal, Typography, Badge } from 'antd';
-import { CheckCircleOutlined, CloseCircleOutlined, EditOutlined, AuditOutlined } from '@ant-design/icons';
+import type { Key } from 'react';
+import { Card, Select, Table, Tag, Button, Radio, Input, message, Modal, Typography, Badge, Space } from 'antd';
+import { CheckCircleOutlined, CloseCircleOutlined, EditOutlined, AuditOutlined, CheckOutlined } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import type { Question, QuestionBank } from '../../types';
 
@@ -26,13 +27,14 @@ const difficultyColors: Record<string, string> = {
 };
 
 export function OnlineReview() {
-  const { questionBanks, updateQuestionStatus, setCurrentStep } = useAppStore();
+  const { questionBanks, updateQuestionStatus, batchUpdateQuestionStatus, setCurrentStep } = useAppStore();
   const [selectedBankId, setSelectedBankId] = useState<string | undefined>();
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [editModal, setEditModal] = useState<{ bankId: string; q: Question } | null>(null);
   const [editContent, setEditContent] = useState('');
   const [rejectModal, setRejectModal] = useState<{ bankId: string; q: Question } | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
 
   const currentBank: QuestionBank | undefined = selectedBankId
     ? questionBanks.find((b) => b.id === selectedBankId)
@@ -57,6 +59,22 @@ export function OnlineReview() {
     if (!currentBank) return;
     updateQuestionStatus(currentBank.id, q.id, 'approved');
     message.success('已通过审核');
+  };
+
+  const handleBatchApprove = () => {
+    if (!currentBank) return;
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先勾选要批量通过的题目');
+      return;
+    }
+    batchUpdateQuestionStatus(currentBank.id, selectedRowKeys as string[], 'approved');
+    message.success(`已批量通过 ${selectedRowKeys.length} 道题`);
+    setSelectedRowKeys([]);
+  };
+
+  const rowSelection = {
+    selectedRowKeys,
+    onChange: (keys: Key[]) => setSelectedRowKeys(keys),
   };
 
   const handleReject = () => {
@@ -164,7 +182,15 @@ export function OnlineReview() {
               <Radio.Button value="rejected">已驳回</Radio.Button>
             </Radio.Group>
           </div>
-          <Button onClick={() => setCurrentStep('manage')}>前往题库管理</Button>
+          <Space>
+            {selectedRowKeys.length > 0 && (
+              <span className="text-gray-500 text-sm">{selectedRowKeys.length} 道题已选</span>
+            )}
+            <Button type="primary" icon={<CheckOutlined />} onClick={handleBatchApprove} disabled={selectedRowKeys.length === 0}>
+              批量通过
+            </Button>
+            <Button onClick={() => setCurrentStep('manage')}>前往题库管理</Button>
+          </Space>
         </div>
 
         {!currentBank ? (
@@ -191,7 +217,15 @@ export function OnlineReview() {
                 <div className="text-gray-500 text-sm">已驳回</div>
               </div>
             </div>
-            <Table rowKey="id" size="small" columns={columns} dataSource={questions} pagination={{ pageSize: 12 }} scroll={{ x: 1200 }} />
+            <Table
+              rowKey="id"
+              size="small"
+              columns={columns}
+              dataSource={questions}
+              pagination={{ pageSize: 12 }}
+              scroll={{ x: 1200 }}
+              rowSelection={rowSelection}
+            />
           </>
         )}
       </Card>

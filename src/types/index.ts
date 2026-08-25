@@ -18,6 +18,14 @@ export interface OutlineItem {
 
 export type QuestionType = 'single' | 'multiple' | 'judge' | 'short' | 'essay' | 'case' | 'calc' | 'blank' | 'ethics';
 
+export interface TypeConfig {
+  type: QuestionType;
+  count: number;
+  score: number;
+  difficulty: number;
+  ratio: number;
+}
+
 export interface Question {
   id: string;
   type: QuestionType;
@@ -67,10 +75,25 @@ export type StepKey =
   | 'plan'
   | 'paper'
   | 'profile'
-  | 'cert';
+  | 'cert'
+  | 'practice';
+
+export type UserRole = 'guest' | 'student' | 'admin';
+
+export interface UserAccount {
+  id: string;
+  username: string;
+  password: string;
+  name: string;
+  role: 'student' | 'admin';
+  createdAt: string;
+}
 
 export interface AppState {
   currentStep: StepKey;
+  currentUser: UserRole;
+  currentUserName: string;
+  userAccounts: UserAccount[];
   standardFiles: FileItem[];
   materialFiles: FileItem[];
   outlineItems: OutlineItem[];
@@ -81,6 +104,9 @@ export interface AppState {
   selectedBankId: string | null;
   profile: PersonalProfile;
   setCurrentStep: (step: StepKey) => void;
+  setCurrentUser: (role: UserRole, name: string) => void;
+  registerAccount: (account: Omit<UserAccount, 'id' | 'createdAt'>) => boolean;
+  logout: () => void;
   addStandardFile: (file: FileItem) => void;
   addMaterialFile: (file: FileItem) => void;
   updateFileStatus: (id: string, status: FileItem['status'], content?: string) => void;
@@ -88,7 +114,9 @@ export interface AppState {
   setAiModel: (model: string) => void;
   setSkillType: (type: string) => void;
   addQuestionBank: (bank: QuestionBank) => void;
+  mergeQuestionBanks: (banks: QuestionBank[]) => void;
   updateQuestionStatus: (bankId: string, qId: string, status: Question['status'], reason?: string) => void;
+  batchUpdateQuestionStatus: (bankId: string, ids: string[], status: Question['status'], reason?: string) => void;
   addExamPlan: (plan: ExamPlanItem) => void;
   setSelectedBankId: (id: string | null) => void;
   updateProfile: (profile: Partial<PersonalProfile>) => void;
