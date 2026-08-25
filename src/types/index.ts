@@ -127,6 +127,7 @@ export interface AppState {
   setSkillType: (type: string) => void;
   addQuestionBank: (bank: QuestionBank) => void;
   mergeQuestionBanks: (banks: QuestionBank[]) => void;
+  removeQuestionBank: (bankId: string) => void;
   updateQuestionStatus: (bankId: string, qId: string, status: Question['status'], reason?: string) => void;
   batchUpdateQuestionStatus: (bankId: string, ids: string[], status: Question['status'], reason?: string) => void;
   addExamPlan: (plan: ExamPlanItem) => void;

@@ -96,6 +96,13 @@ export const useAppStore = create<AppState>()(
           };
         }),
 
+      removeQuestionBank: (bankId: string) =>
+        set((state) => {
+          const remaining = state.questionBanks.filter((b) => b.id !== bankId);
+          const selected = state.selectedBankId === bankId ? (remaining[remaining.length - 1]?.id ?? null) : state.selectedBankId;
+          return { questionBanks: remaining, selectedBankId: selected };
+        }),
+
       updateQuestionStatus: (bankId: string, qId: string, status: Question['status'], reason?: string) =>
         set((state) => ({
           questionBanks: state.questionBanks.map((bank) =>

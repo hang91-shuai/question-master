@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Card, Table, Tag, Button, Select, message, Modal, Input, Progress } from 'antd';
-import { DownloadOutlined, DatabaseOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { Card, Table, Tag, Button, Select, message, Modal, Input, Progress, Popconfirm } from 'antd';
+import { DeleteOutlined, DownloadOutlined, DatabaseOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { exportToExcel } from '../../utils/fileParser';
+import type { QuestionBank } from '../../types';
 
 const typeLabels: Record<string, string> = {
   single: '单选', multiple: '多选', judge: '判断', short: '简答', essay: '论述',
@@ -10,13 +11,19 @@ const typeLabels: Record<string, string> = {
 };
 
 export function ManageBank() {
-  const { questionBanks, setCurrentStep } = useAppStore();
+  const { questionBanks, setCurrentStep, removeQuestionBank } = useAppStore();
   const [bankId, setBankId] = useState<string | undefined>();
   const [search, setSearch] = useState('');
   const [addModal, setAddModal] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
 
   const currentBank = bankId ? questionBanks.find((b) => b.id === bankId) : questionBanks[questionBanks.length - 1];
+
+  const handleDelete = (bank: QuestionBank) => {
+    removeQuestionBank(bank.id);
+    setBankId(undefined);
+    message.success(`题库「${bank.name}」已删除`);
+  };
   const questions = (currentBank?.questions || []).filter((q) => q.content.includes(search) || q.outlineName.includes(search));
 
   const handleExport = () => {
@@ -74,6 +81,17 @@ export function ManageBank() {
           <div className="flex flex-wrap items-center gap-2">
             <Button icon={<PlusOutlined />} type="primary" onClick={() => setAddModal(true)}>从 Excel 导入</Button>
             <Button icon={<DownloadOutlined />} onClick={handleExport}>导出 Excel</Button>
+            <Popconfirm
+              title="删除题库"
+              description={currentBank ? `确定删除题库「${currentBank.name}」吗？该操作不可恢复。` : '当前没有可删除的题库'}
+              okText="删除"
+              okButtonProps={{ danger: true }}
+              cancelText="取消"
+              disabled={!currentBank}
+              onConfirm={() => currentBank && handleDelete(currentBank)}
+            >
+              <Button danger icon={<DeleteOutlined />} disabled={!currentBank}>删除题库</Button>
+            </Popconfirm>
             <Button onClick={() => setCurrentStep('review')}>前往在线审核</Button>
           </div>
         </div>
