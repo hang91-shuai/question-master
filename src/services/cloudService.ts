@@ -1,91 +1,149 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import cloudbase from '@cloudbase/js-sdk';
 import type { QuestionBank } from '../types';
 
-// 从 .env.local 读取 CloudBase PostgreSQL 配置
-// CloudBase 新版 PostgreSQL 兼容 Supabase/PostgREST 协议
 const CLOUDBASE_URL = import.meta.env.VITE_CLOUDBASE_URL || '';
-const CLOUDBASE_ANON_KEY = import.meta.env.VITE_CLOUDBASE_ANON_KEY || '';
+const CLOUDBASE_PUBLISHABLE_KEY = import.meta.env.VITE_CLOUDBASE_ANON_KEY || '';
 
-let client: SupabaseClient | null = null;
+// 从 REST URL 中解析环境 ID，例如：
+// https://hang-91-d5g44hojk64d3da49.api.tcloudbasegateway.com/v1/rdb/rest
+// => hang-91-d5g44hojk64d3da49
+function extractEnvId(url: string): string | null {
+  const match = url.match(/https?:\/\/([^.]+)\.api\.tcloudbasegateway\.com/);
+  return match?.[1] || null;
+}
+
+const envId = extractEnvId(CLOUDBASE_URL);
+const restBaseUrl = CLOUDBASE_URL;
+
+let accessToken: string | null = null;
+let tokenExpiresAt = 0;
 
 export function isCloudConfigured(): boolean {
-  return Boolean(CLOUDBASE_URL && CLOUDBASE_ANON_KEY);
+  return Boolean(envId && CLOUDBASE_PUBLISHABLE_KEY);
 }
 
-function getClient(): SupabaseClient {
-  if (!isCloudConfigured()) {
-    throw new Error(
-      'CloudBase 未配置：请在 .env.local 中设置 VITE_CLOUDBASE_URL 和 VITE_CLOUDBASE_ANON_KEY'
-    );
+async function ensureAnonymousAuth(): Promise<string> {
+  const now = Date.now();
+  if (accessToken && tokenExpiresAt > now + 60_000) {
+    return accessToken;
   }
-  if (!client) {
-    client = createClient(CLOUDBASE_URL, CLOUDBASE_ANON_KEY, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
+
+  const app = cloudbase.init({
+    env: envId!,
+    accessKey: CLOUDBASE_PUBLISHABLE_KEY,
+  });
+
+  const auth = app.auth as any;
+  const { data, error } = await auth.signInAnonymously();
+  if (error) {
+    throw new Error(`CloudBase 匿名登录失败: ${error.message || JSON.stringify(error)}`);
+  }
+
+  const token = data?.session?.access_token;
+  if (!token) {
+    throw new Error('CloudBase 匿名登录未返回 access_token');
+  }
+
+  accessToken = token;
+  // 令牌过期时间，预留 60 秒缓冲
+  tokenExpiresAt = now + (data.session.expires_in || 3600) * 1000;
+  return token;
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const token = await ensureAnonymousAuth();
+  return {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
+}
+
+function parseResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    return res.text().then((text) => {
+      throw new Error(`CloudBase 请求失败 (${res.status}): ${text || res.statusText}`);
     });
   }
-  return client;
+  // 204 / DELETE 等可能没有 body
+  if (res.status === 204 || res.headers.get('content-length') === '0') {
+    return Promise.resolve({} as T);
+  }
+  return res.json() as Promise<T>;
 }
 
-const BANK_TABLE = 'question_banks';
-
-export interface CloudBankRecord {
-  id: string;
-  name: string;
-  type: 'theory' | 'skill';
-  created_at: string;
-  question_count: number;
-  questions: QuestionBank['questions'];
-}
-
-/** 把本地题库全量同步到云端（覆盖式，保证共享一致） */
+/**
+ * 将本地题库同步（覆盖）到云端
+ */
 export async function syncBanksToCloud(banks: QuestionBank[]): Promise<void> {
-  const supabase = getClient();
-
-  // 先清空旧数据，再批量写入（简单可靠的覆盖策略）
-  const { error: deleteError } = await supabase.from(BANK_TABLE).delete().neq('id', '');
-  if (deleteError) {
-    throw new Error(`清空云端题库失败：${deleteError.message}`);
+  if (!isCloudConfigured()) {
+    throw new Error('CloudBase 未配置，请先设置 VITE_CLOUDBASE_URL 与 VITE_CLOUDBASE_ANON_KEY');
   }
 
-  if (banks.length === 0) return;
+  const headers = await getAuthHeaders();
 
-  const records: CloudBankRecord[] = banks.map((b) => ({
+  // 1. 查询云端现有记录的 id
+  const listRes = await fetch(`${restBaseUrl}/question_banks?id=not.is.null`, {
+    method: 'GET',
+    headers,
+  });
+  const existing: { id: string }[] = await parseResponse(listRes);
+
+  // 2. 删除云端已有记录
+  if (existing.length > 0) {
+    const ids = existing.map((r) => r.id).join(',');
+    const deleteRes = await fetch(`${restBaseUrl}/question_banks?id=in.(${ids})`, {
+      method: 'DELETE',
+      headers,
+    });
+    await parseResponse(deleteRes);
+  }
+
+  // 3. 批量插入本地题库
+  const rows = banks.map((b) => ({
     id: b.id,
     name: b.name,
     type: b.type,
     created_at: b.createdAt,
-    question_count: b.questionCount,
+    question_count: b.questionCount ?? b.questions.length,
     questions: b.questions,
   }));
 
-  // 云数据库单次写入有大小限制，分块写入
-  const CHUNK = 20;
-  for (let i = 0; i < records.length; i += CHUNK) {
-    const { error } = await supabase.from(BANK_TABLE).insert(records.slice(i, i + CHUNK));
-    if (error) {
-      throw new Error(`同步题库到云端失败：${error.message}`);
-    }
-  }
+  const insertRes = await fetch(`${restBaseUrl}/question_banks`, {
+    method: 'POST',
+    headers: {
+      ...headers,
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify(rows),
+  });
+  await parseResponse(insertRes);
 }
 
-/** 从云端拉取题库 */
+/**
+ * 从云端拉取题库
+ */
 export async function fetchBanksFromCloud(): Promise<QuestionBank[]> {
-  const supabase = getClient();
-  const { data, error } = await supabase.from(BANK_TABLE).select('*');
-  if (error) {
-    throw new Error(`从云端拉取题库失败：${error.message}`);
+  if (!isCloudConfigured()) {
+    throw new Error('CloudBase 未配置，请先设置 VITE_CLOUDBASE_URL 与 VITE_CLOUDBASE_ANON_KEY');
   }
 
-  const rows: CloudBankRecord[] = (data as CloudBankRecord[]) || [];
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    type: r.type,
-    createdAt: r.created_at,
-    questionCount: r.question_count ?? (r.questions?.length || 0),
-    questions: r.questions || [],
-  }));
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${restBaseUrl}/question_banks?select=*`, {
+    method: 'GET',
+    headers,
+  });
+  const data: any[] = await parseResponse(res);
+
+  return data.map((row) => {
+    const questions = Array.isArray(row.questions) ? row.questions : [];
+    return {
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      createdAt: row.created_at,
+      questionCount: typeof row.question_count === 'number' ? row.question_count : questions.length,
+      questions,
+    } as QuestionBank;
+  });
 }
