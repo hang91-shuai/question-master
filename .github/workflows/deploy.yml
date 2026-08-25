@@ -34,8 +34,9 @@ jobs:
 
       - name: Build
         env:
-          # CloudBase 环境 ID 从 GitHub Secrets 注入
-          VITE_CLOUDBASE_ENV_ID: ${{ secrets.VITE_CLOUDBASE_ENV_ID }}
+          # CloudBase 新版 PostgreSQL（题库共享）
+          VITE_CLOUDBASE_URL: ${{ secrets.VITE_CLOUDBASE_URL }}
+          VITE_CLOUDBASE_ANON_KEY: ${{ secrets.VITE_CLOUDBASE_ANON_KEY }}
           # AI API（可选）
           VITE_AI_API_BASE_URL: ${{ secrets.VITE_AI_API_BASE_URL }}
           VITE_AI_API_KEY: ${{ secrets.VITE_AI_API_KEY }}
