@@ -34,9 +34,8 @@ jobs:
 
       - name: Build
         env:
-          # CloudBase 新版 PostgreSQL（题库共享）
-          VITE_CLOUDBASE_URL: ${{ secrets.VITE_CLOUDBASE_URL }}
-          VITE_CLOUDBASE_ANON_KEY: ${{ secrets.VITE_CLOUDBASE_ANON_KEY }}
+          # 云端题库共享（HTTP 云函数代理，绕开 CORS）
+          VITE_CLOUDBASE_PROXY_URL: ${{ secrets.VITE_CLOUDBASE_PROXY_URL }}
           # AI API（可选）
           VITE_AI_API_BASE_URL: ${{ secrets.VITE_AI_API_BASE_URL }}
           VITE_AI_API_KEY: ${{ secrets.VITE_AI_API_KEY }}

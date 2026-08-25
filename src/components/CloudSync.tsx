@@ -68,8 +68,8 @@ export function CloudSync() {
                 className="mt-2"
                 type="warning"
                 showIcon
-                message="未配置 CloudBase PostgreSQL"
-                description="请在项目根目录 .env.local 中设置 VITE_CLOUDBASE_URL 和 VITE_CLOUDBASE_ANON_KEY 后重启服务，再使用云端共享功能。"
+                message="未配置云端同步代理"
+                description="请在项目根目录 .env.local 中设置 VITE_CLOUDBASE_PROXY_URL（HTTP 云函数代理地址）后重新构建部署，再使用云端共享功能。"
               />
             )}
           </div>

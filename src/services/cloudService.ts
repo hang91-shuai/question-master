@@ -1,102 +1,97 @@
-import cloudbase from '@cloudbase/js-sdk';
 import type { QuestionBank } from '../types';
 
-const CLOUDBASE_URL = import.meta.env.VITE_CLOUDBASE_URL || '';
-const CLOUDBASE_PUBLISHABLE_KEY = import.meta.env.VITE_CLOUDBASE_ANON_KEY || '';
+// 云函数代理地址（HTTP 网关 /api 路径）
+// 云函数在服务端转发对 PostgREST 数据库 API 的请求，从而绕开浏览器 CORS。
+const PROXY_URL = import.meta.env.VITE_CLOUDBASE_PROXY_URL || '';
 
-// 从 REST URL 中解析环境 ID，例如：
-// https://hang-91-d5g44hojk64d3da49.api.tcloudbasegateway.com/v1/rdb/rest
-// => hang-91-d5g44hojk64d3da49
-function extractEnvId(url: string): string | null {
-  const match = url.match(/https?:\/\/([^.]+)\.api\.tcloudbasegateway\.com/);
-  return match?.[1] || null;
-}
-
-const envId = extractEnvId(CLOUDBASE_URL);
-const restBaseUrl = CLOUDBASE_URL;
-
-let accessToken: string | null = null;
-let tokenExpiresAt = 0;
-
+// 兼容旧配置：如果没有 PROXY_URL，则从 VITE_CLOUDBASE_URL 派生网关地址
+// 但强烈建议显式配置 VITE_CLOUDBASE_PROXY_URL
 export function isCloudConfigured(): boolean {
-  return Boolean(envId && CLOUDBASE_PUBLISHABLE_KEY);
+  return Boolean(PROXY_URL);
 }
 
-async function ensureAnonymousAuth(): Promise<string> {
-  const now = Date.now();
-  if (accessToken && tokenExpiresAt > now + 60_000) {
-    return accessToken;
+interface ProxyRequest {
+  path: string;
+  method?: string;
+  query?: string;
+  body?: unknown;
+  prefer?: string;
+}
+
+interface ProxyResponse {
+  statusCode?: number;
+  body?: string;
+}
+
+/**
+ * 通过云函数代理调用数据库 PostgREST API。
+ * 返回解析后的 JSON 数据（数组/对象）或 null（204 等无内容响应）。
+ */
+async function proxyRequest(req: ProxyRequest): Promise<any> {
+  if (!PROXY_URL) {
+    throw new Error('云函数代理未配置，请设置 VITE_CLOUDBASE_PROXY_URL');
   }
 
-  const app = cloudbase.init({
-    env: envId!,
-    accessKey: CLOUDBASE_PUBLISHABLE_KEY,
+  const res = await fetch(PROXY_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
   });
 
-  const auth = app.auth as any;
-  const { data, error } = await auth.signInAnonymously();
-  if (error) {
-    throw new Error(`CloudBase 匿名登录失败: ${error.message || JSON.stringify(error)}`);
-  }
-
-  const token = data?.session?.access_token;
-  if (!token) {
-    throw new Error('CloudBase 匿名登录未返回 access_token');
-  }
-
-  accessToken = token;
-  // 令牌过期时间，预留 60 秒缓冲
-  tokenExpiresAt = now + (data.session.expires_in || 3600) * 1000;
-  return token;
-}
-
-async function getAuthHeaders(): Promise<Record<string, string>> {
-  const token = await ensureAnonymousAuth();
-  return {
-    Authorization: `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  };
-}
-
-function parseResponse<T>(res: Response): Promise<T> {
+  // 云函数会返回我们业务层可识别的错误
   if (!res.ok) {
-    return res.text().then((text) => {
-      throw new Error(`CloudBase 请求失败 (${res.status}): ${text || res.statusText}`);
-    });
+    const text = await res.text();
+    throw new Error(`云函数请求失败 (${res.status}): ${text || res.statusText}`);
   }
-  // 204 / DELETE 等可能没有 body
-  if (res.status === 204 || res.headers.get('content-length') === '0') {
-    return Promise.resolve({} as T);
+
+  let payload: ProxyResponse;
+  try {
+    payload = await res.json();
+  } catch {
+    return null;
   }
-  return res.json() as Promise<T>;
+
+  // 云函数内部可能返回 statusCode/body 结构
+  if (payload && typeof payload.statusCode === 'number') {
+    if (payload.statusCode >= 200 && payload.statusCode < 300) {
+      // 解析 body（可能为空）
+      if (payload.body) {
+        try {
+          return JSON.parse(payload.body);
+        } catch {
+          return payload.body;
+        }
+      }
+      return null;
+    }
+    throw new Error(`数据库请求失败 (${payload.statusCode}): ${payload.body || ''}`);
+  }
+
+  // 直接返回数据（兼容不同响应结构）
+  return payload;
 }
 
 /**
  * 将本地题库同步（覆盖）到云端
  */
 export async function syncBanksToCloud(banks: QuestionBank[]): Promise<void> {
-  if (!isCloudConfigured()) {
-    throw new Error('CloudBase 未配置，请先设置 VITE_CLOUDBASE_URL 与 VITE_CLOUDBASE_ANON_KEY');
-  }
-
-  const headers = await getAuthHeaders();
-
-  // 1. 查询云端现有记录的 id
-  const listRes = await fetch(`${restBaseUrl}/question_banks?id=not.is.null`, {
+  // 1. 查询云端现有记录
+  const existing = await proxyRequest({
+    path: '/question_banks',
     method: 'GET',
-    headers,
+    query: 'select=id',
   });
-  const existing: { id: string }[] = await parseResponse(listRes);
 
-  // 2. 删除云端已有记录
-  if (existing.length > 0) {
-    const ids = existing.map((r) => r.id).join(',');
-    const deleteRes = await fetch(`${restBaseUrl}/question_banks?id=in.(${ids})`, {
+  const existingList: { id: string }[] = Array.isArray(existing) ? existing : [];
+
+  // 2. 删除云端已有记录（覆盖式同步）
+  if (existingList.length > 0) {
+    const ids = existingList.map((r) => r.id).join(',');
+    await proxyRequest({
+      path: '/question_banks',
       method: 'DELETE',
-      headers,
+      query: `id=in.(${ids})`,
     });
-    await parseResponse(deleteRes);
   }
 
   // 3. 批量插入本地题库
@@ -109,33 +104,27 @@ export async function syncBanksToCloud(banks: QuestionBank[]): Promise<void> {
     questions: b.questions,
   }));
 
-  const insertRes = await fetch(`${restBaseUrl}/question_banks`, {
+  await proxyRequest({
+    path: '/question_banks',
     method: 'POST',
-    headers: {
-      ...headers,
-      Prefer: 'return=minimal',
-    },
-    body: JSON.stringify(rows),
+    body: rows,
+    prefer: 'return=minimal',
   });
-  await parseResponse(insertRes);
 }
 
 /**
  * 从云端拉取题库
  */
 export async function fetchBanksFromCloud(): Promise<QuestionBank[]> {
-  if (!isCloudConfigured()) {
-    throw new Error('CloudBase 未配置，请先设置 VITE_CLOUDBASE_URL 与 VITE_CLOUDBASE_ANON_KEY');
-  }
-
-  const headers = await getAuthHeaders();
-  const res = await fetch(`${restBaseUrl}/question_banks?select=*`, {
+  const data = await proxyRequest({
+    path: '/question_banks',
     method: 'GET',
-    headers,
+    query: 'select=*',
   });
-  const data: any[] = await parseResponse(res);
 
-  return data.map((row) => {
+  const rows: any[] = Array.isArray(data) ? data : [];
+
+  return rows.map((row) => {
     const questions = Array.isArray(row.questions) ? row.questions : [];
     return {
       id: row.id,

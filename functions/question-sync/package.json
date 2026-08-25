@@ -1,0 +1,7 @@
+{
+  "name": "question-sync",
+  "version": "1.0.0",
+  "description": "题库同步云函数：服务端代理访问 CloudBase 数据库，解决浏览器跨域问题",
+  "main": "index.js",
+  "dependencies": {}
+}
