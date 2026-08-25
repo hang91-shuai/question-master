@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Card, Radio, Button, InputNumber, Select, message, Table, Tag, Progress, Empty, Divider, Input } from 'antd';
+import { Card, Radio, Button, InputNumber, Select, message, Table, Tag, Progress, Empty, Divider, Input, Checkbox } from 'antd';
 import { ThunderboltOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { createQuestionBank } from '../../utils/mockAI';
@@ -29,6 +29,8 @@ const presetTemplates: Record<
   theory: [
     { key: 'standard', label: '初级认证·标准', desc: '单选192 + 多选64 + 判断64（共320题）', counts: { single: 192, multiple: 64, judge: 64 } },
     { key: 'lite', label: '初级认证·精简', desc: '单选96 + 多选32 + 判断32（共160题）', counts: { single: 96, multiple: 32, judge: 32 } },
+    { key: 'batch60', label: '整书批次·60道', desc: '单选40 + 多选10 + 判断10（共60题）', counts: { single: 40, multiple: 10, judge: 10 } },
+    { key: 'batch30', label: '整书批次·30道', desc: '单选20 + 多选5 + 判断5（共30题）', counts: { single: 20, multiple: 5, judge: 5 } },
     { key: 'demo', label: '入门体验', desc: '单选10 + 判断10（共20题）', counts: { single: 10, judge: 10 } },
   ],
   skill: [
@@ -74,6 +76,18 @@ export function GenerateQuestions() {
 
   const [typeConfigs, setTypeConfigs] = useState<TypeConfig[]>(initialConfigs);
   const [presetKey, setPresetKey] = useState<string>('standard');
+  const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
+
+  // 大纲变化时默认全选所有知识点
+  useEffect(() => {
+    setSelectedCodes(outlineItems.map((o) => o.code));
+  }, [outlineItems]);
+
+  // 实际参与生成的知识点（用户勾选的范围）
+  const scopedOutlineItems = useMemo(
+    () => outlineItems.filter((o) => selectedCodes.includes(o.code)),
+    [outlineItems, selectedCodes]
+  );
 
   const applyTemplate = (key: string) => {
     setPresetKey(key);
@@ -114,6 +128,11 @@ export function GenerateQuestions() {
       return;
     }
 
+    if (scopedOutlineItems.length === 0) {
+      message.warning('请至少勾选一个知识点');
+      return;
+    }
+
     if (dataSource === 'ai' && !isAIConfigured()) {
       message.error('使用 AI 生成需先配置 API：请在项目根目录 .env.local 中设置 VITE_AI_API_BASE_URL 和 VITE_AI_API_KEY');
       return;
@@ -141,7 +160,7 @@ export function GenerateQuestions() {
         .filter((f) => f.status === 'done' && f.content)
         .map((f) => `【${f.name}】\n${f.content}`)
         .join('\n\n');
-      const bank = await createQuestionBank(name, bankType, outlineItems, level, useAI, typeConfigs, aiModel, existing, materialText);
+      const bank = await createQuestionBank(name, bankType, scopedOutlineItems, level, useAI, typeConfigs, aiModel, existing, materialText);
       addQuestionBank(bank);
       clearInterval(progressTimer);
       setProgress(100);
@@ -291,6 +310,27 @@ export function GenerateQuestions() {
                 {totalCount}<span className="text-sm font-normal text-gray-500 ml-1">道</span>
               </div>
               <div className="text-gray-400 text-xs mt-1">由下方题型配置自动汇总</div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                <div className="text-sm font-medium text-gray-700">
+                  知识点范围
+                  <span className="text-xs font-normal text-gray-400 ml-2">已选 {selectedCodes.length} / {outlineItems.length}</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <Button type="link" size="small" className="!px-0" onClick={() => setSelectedCodes(outlineItems.map((o) => o.code))}>全选</Button>
+                  <span className="text-gray-300">|</span>
+                  <Button type="link" size="small" className="!px-0" onClick={() => setSelectedCodes([])}>清空</Button>
+                </div>
+              </div>
+              <Checkbox.Group
+                value={selectedCodes}
+                onChange={(vals) => setSelectedCodes(vals as string[])}
+                className="flex flex-col gap-1 max-h-[180px] overflow-y-auto border border-gray-200 rounded-md p-2"
+                options={outlineItems.map((o) => ({ label: `${o.name}（${o.points.length}考点）`, value: o.code }))}
+              />
+              <div className="text-gray-400 text-xs mt-1">分章节出题时，只勾选本次要出的章节知识点；跨题库去重依然生效</div>
             </div>
 
             <Button type="primary" size="large" icon={<ThunderboltOutlined />} loading={generating} onClick={handleGenerate} block>

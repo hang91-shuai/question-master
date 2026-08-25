@@ -72,9 +72,22 @@ export function OnlineReview() {
     setSelectedRowKeys([]);
   };
 
+  const handleApproveAll = () => {
+    if (!currentBank) return;
+    const pending = currentBank.questions.filter((q) => q.status !== 'approved').map((q) => q.id);
+    if (pending.length === 0) {
+      message.info('当前题库的题目都已通过审核，无需操作');
+      return;
+    }
+    batchUpdateQuestionStatus(currentBank.id, pending, 'approved');
+    message.success(`已将全部 ${pending.length} 道未通过题目一键审核通过`);
+    setSelectedRowKeys([]);
+  };
+
   const rowSelection = {
     selectedRowKeys,
     onChange: (keys: Key[]) => setSelectedRowKeys(keys),
+    columnTitle: '全选',
   };
 
   const handleReject = () => {
@@ -189,6 +202,10 @@ export function OnlineReview() {
             <Button type="primary" icon={<CheckOutlined />} onClick={handleBatchApprove} disabled={selectedRowKeys.length === 0}>
               批量通过
             </Button>
+            <Button danger icon={<CheckCircleOutlined />} onClick={handleApproveAll}>
+              全部通过
+            </Button>
+            <Button onClick={() => setCurrentStep('generate')}>前往生成题库</Button>
             <Button onClick={() => setCurrentStep('manage')}>前往题库管理</Button>
           </Space>
         </div>

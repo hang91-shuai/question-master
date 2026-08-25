@@ -39,6 +39,10 @@ export function buildPrompt(
     .map((o) => `- ${o.code} ${o.name}：${o.points.join('；')}`)
     .join('\n');
 
+  const scopeNote = outlineItems.length > 0
+    ? `【本次出题范围】\n本次仅围绕上面列出的 ${outlineItems.length} 个知识点出题。\n每道题的 outlineCode / outlineName 必须取自上述大纲中的某一项；禁止超出本范围编写考点，禁止臆造未列出的大纲内容。\n题目应尽量均匀覆盖本范围内各知识点。\n`
+    : '';
+
   const configText = typeConfigs
     .filter((c) => c.count > 0)
     .map((c) => `- ${typeLabels[c.type]}：${c.count}道，难度${c.difficulty}，分值${c.score}`)
@@ -76,7 +80,7 @@ ${dedupText}
 
 【职业功能大纲】
 ${outlineText}
-${materialSection}${dedupSection}
+${scopeNote}${materialSection}${dedupSection}
 【题型配置】只生成以下题型，且严格按照数量生成：
 ${configText}
 
@@ -93,7 +97,7 @@ ${configText}
   "source": "教材出处，如《基础知识》P20"
 }
 2. 单选必须有 4 个选项；多选必须有 4-6 个选项，答案用顿号分隔多个选项字母（如"A、B、C"），且多选需全部选对才得分；判断题答案只能为"正确"或"错误"，选项固定为"正确、错误"，不得使用"对/错"。
-3. 题目必须贴合大纲中的具体职业功能，不能泛泛而谈。
+3. 题目必须严格贴合上述大纲中已列出的知识点，不能超出本次范围、不能泛泛而谈。
 4. 严格依托教材原文，不超纲、不臆造。
 5. 答案解析不得敷衍，须有实质内容。
 6. 直接返回一个 JSON 数组，不要 Markdown 代码块，不要任何解释说明。
