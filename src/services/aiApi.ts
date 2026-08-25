@@ -48,24 +48,28 @@ export function buildPrompt(
 【职业功能大纲】
 ${outlineText}
 
+【教材依据】
+依据职业技能等级认定指定教材出题，严格依托教材原文，不超纲、不臆造。
+
 【题型配置】只生成以下题型，且严格按照数量生成：
 ${configText}
 
 【要求】
 1. 每道题必须是如下 JSON 对象：
 {
-  "type": "single/multiple/judge/short/essay/blank/case/calc 之一",
+  "type": "single/multiple/judge 之一",
   "content": "题干",
   "options": ["选项A", "选项B", "选项C", "选项D"],
   "answer": "正确答案",
-  "analysis": "解析",
-  "outlineCode": "对应大纲编号",
-  "outlineName": "对应大纲名称"
+  "analysis": "解析（50字以上，须说明正确项为何正确、错误项为何错误）",
+  "outlineCode": "对应大纲编号，如01",
+  "outlineName": "对应大纲名称，如数字化组织管理",
+  "source": "教材出处，如《基础知识》P20"
 }
-2. 单选必须有 4 个选项；多选必须有 4-6 个选项，答案用顿号分隔多个选项字母；判断题答案为"正确"或"错误"。
-3. 简答、论述、案例分析、计算题答案应具体、可操作，不要只写"略"。
-4. 填空题 content 中用"______"表示填空位置，answer 为完整答案或关键答案。
-5. 题目必须贴合大纲中的具体职业功能，不能泛泛而谈。
+2. 单选必须有 4 个选项；多选必须有 4-6 个选项，答案用顿号分隔多个选项字母（如"A、B、C"），且多选需全部选对才得分；判断题答案只能为"正确"或"错误"，选项固定为"正确、错误"，不得使用"对/错"。
+3. 题目必须贴合大纲中的具体职业功能，不能泛泛而谈。
+4. 严格依托教材原文，不超纲、不臆造。
+5. 答案解析不得敷衍，须有实质内容。
 6. 直接返回一个 JSON 数组，不要 Markdown 代码块，不要任何解释说明。
 `;
 }
@@ -136,7 +140,7 @@ export async function generateQuestionsByAI(
     difficulty: ['easy', 'medium', 'hard'].includes(item.difficulty)
       ? item.difficulty
       : 'medium',
-    source: `AI 大模型生成 (${modelKey})`,
+    source: item.source || `AI 大模型生成 (${modelKey})`,
     status: 'pending',
   })) as Question[];
 }
