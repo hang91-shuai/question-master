@@ -92,6 +92,20 @@ export const useAppStore = create<AppState>()(
           selectedBankId: bank.id,
         })),
 
+      appendQuestionsToBank: (bankId: string, questions: Question[]) =>
+        set((state) => ({
+          questionBanks: state.questionBanks.map((bank) =>
+            bank.id === bankId
+              ? {
+                  ...bank,
+                  questions: [...bank.questions, ...questions],
+                  updatedAt: new Date().toISOString(),
+                }
+              : bank
+          ),
+          selectedBankId: bankId,
+        })),
+
       mergeQuestionBanks: (banks: QuestionBank[]) =>
         set((state) => {
           const existingIds = new Set(state.questionBanks.map((b) => b.id));

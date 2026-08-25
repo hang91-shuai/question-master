@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Card, Radio, Button, InputNumber, Select, message, Table, Tag, Progress, Empty, Divider, Input, Checkbox } from 'antd';
 import { ThunderboltOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
-import { createQuestionBank } from '../../utils/mockAI';
+import { createQuestionBank, generateQuestions } from '../../utils/mockAI';
 import { isAIConfigured } from '../../services/aiApi';
 import type { QuestionType, TypeConfig } from '../../types';
 import { Sparkles, HardDrive } from 'lucide-react';
@@ -53,7 +53,7 @@ function buildConfigs(bankType: 'theory' | 'skill', counts: Partial<Record<Quest
 }
 
 export function GenerateQuestions() {
-  const { outlineItems, materialFiles, questionBanks, addQuestionBank, setCurrentStep } = useAppStore();
+  const { outlineItems, materialFiles, questionBanks, addQuestionBank, appendQuestionsToBank, setCurrentStep } = useAppStore();
 
   const [bankType, setBankType] = useState<'theory' | 'skill'>('theory');
   const [dataSource, setDataSource] = useState<'standard' | 'ai'>('standard');
@@ -77,6 +77,8 @@ export function GenerateQuestions() {
   const [typeConfigs, setTypeConfigs] = useState<TypeConfig[]>(initialConfigs);
   const [presetKey, setPresetKey] = useState<string>('standard');
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
+  const [targetMode, setTargetMode] = useState<'new' | 'existing'>('new');
+  const [targetBankId, setTargetBankId] = useState<string | null>(null);
 
   // 大纲变化时默认全选所有知识点
   useEffect(() => {
@@ -138,6 +140,17 @@ export function GenerateQuestions() {
       return;
     }
 
+    if (targetMode === 'existing' && !targetBankId) {
+      message.warning('请选择要追加的已有题库');
+      return;
+    }
+
+    const targetBank = targetMode === 'existing' ? questionBanks.find((b) => b.id === targetBankId) : null;
+    if (targetMode === 'existing' && targetBank && targetBank.type !== bankType) {
+      message.warning('追加目标题库类型与当前所选类型不一致');
+      return;
+    }
+
     const name = bankName.trim() || `${bankType === 'theory' ? '理论' : '技能'}题库·${level}`;
 
     setGenerating(true);
@@ -160,11 +173,22 @@ export function GenerateQuestions() {
         .filter((f) => f.status === 'done' && f.content)
         .map((f) => `【${f.name}】\n${f.content}`)
         .join('\n\n');
-      const bank = await createQuestionBank(name, bankType, scopedOutlineItems, level, useAI, typeConfigs, aiModel, existing, materialText);
-      addQuestionBank(bank);
-      clearInterval(progressTimer);
-      setProgress(100);
-      message.success(`已生成「${bank.name}」，共 ${bank.questionCount} 道题`);
+
+      if (targetMode === 'existing' && targetBankId) {
+        // 追加到已有题库
+        const questions = await generateQuestions(scopedOutlineItems, bankType, level, useAI, typeConfigs, aiModel, existing, materialText);
+        appendQuestionsToBank(targetBankId, questions);
+        clearInterval(progressTimer);
+        setProgress(100);
+        message.success(`已追加 ${questions.length} 道题到「${targetBank?.name}」，当前共 ${(targetBank?.questionCount ?? 0) + questions.length} 道题`);
+      } else {
+        // 新建题库
+        const bank = await createQuestionBank(name, bankType, scopedOutlineItems, level, useAI, typeConfigs, aiModel, existing, materialText);
+        addQuestionBank(bank);
+        clearInterval(progressTimer);
+        setProgress(100);
+        message.success(`已生成「${bank.name}」，共 ${bank.questionCount} 道题`);
+      }
     } catch (err: any) {
       clearInterval(progressTimer);
       message.error(err.message || '生成失败，请检查配置后重试');
@@ -293,16 +317,47 @@ export function GenerateQuestions() {
             </div>
 
             <div>
-              <div className="text-sm font-medium text-gray-700 mb-2">题库名称</div>
-              <Input
-                placeholder="如：2026年五级茶艺师理论题库"
-                value={bankName}
-                onChange={(e) => setBankName(e.target.value)}
-                style={{ width: '100%' }}
-                maxLength={60}
-                showCount
-              />
+              <div className="text-sm font-medium text-gray-700 mb-2">目标题库</div>
+              <Radio.Group
+                value={targetMode}
+                onChange={(e) => {
+                  setTargetMode(e.target.value);
+                  if (e.target.value === 'new') setTargetBankId(null);
+                }}
+              >
+                <Radio value="new">新建题库</Radio>
+                <Radio value="existing">追加到已有题库</Radio>
+              </Radio.Group>
             </div>
+
+            {targetMode === 'new' ? (
+              <div>
+                <div className="text-sm font-medium text-gray-700 mb-2">题库名称</div>
+                <Input
+                  placeholder="如：2026年五级茶艺师理论题库"
+                  value={bankName}
+                  onChange={(e) => setBankName(e.target.value)}
+                  style={{ width: '100%' }}
+                  maxLength={60}
+                  showCount
+                />
+                <div className="text-gray-400 text-xs mt-1">留空将使用默认名称</div>
+              </div>
+            ) : (
+              <div>
+                <div className="text-sm font-medium text-gray-700 mb-2">选择要追加的题库</div>
+                <Select
+                  placeholder="请选择一个已有题库"
+                  value={targetBankId}
+                  onChange={(val) => setTargetBankId(val)}
+                  style={{ width: '100%' }}
+                  options={questionBanks
+                    .filter((b) => b.type === bankType)
+                    .map((b) => ({ value: b.id, label: `${b.name}（${b.questionCount}道）` }))}
+                />
+                <div className="text-gray-400 text-xs mt-1">新题会追加到该题库末尾，自动与已有题目去重</div>
+              </div>
+            )}
 
             <div>
               <div className="text-sm font-medium text-gray-700 mb-2">生成题量</div>

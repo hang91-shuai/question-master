@@ -127,6 +127,7 @@ export interface AppState {
   setAiModel: (model: string) => void;
   setSkillType: (type: string) => void;
   addQuestionBank: (bank: QuestionBank) => void;
+  appendQuestionsToBank: (bankId: string, questions: Question[]) => void;
   mergeQuestionBanks: (banks: QuestionBank[]) => void;
   removeQuestionBank: (bankId: string) => void;
   updateQuestionStatus: (bankId: string, qId: string, status: Question['status'], reason?: string) => void;
