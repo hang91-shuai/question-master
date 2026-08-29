@@ -63,6 +63,12 @@ export const useAppStore = create<AppState>()(
       addMaterialFile: (file: FileItem) =>
         set((state) => ({ materialFiles: [...state.materialFiles, file] })),
 
+      removeStandardFile: (id: string) =>
+        set((state) => ({ standardFiles: state.standardFiles.filter((f) => f.id !== id) })),
+
+      removeMaterialFile: (id: string) =>
+        set((state) => ({ materialFiles: state.materialFiles.filter((f) => f.id !== id) })),
+
       updateFileStatus: (id: string, status: FileItem['status'], content?: string) =>
         set((state) => ({
           standardFiles: state.standardFiles.map((f) =>

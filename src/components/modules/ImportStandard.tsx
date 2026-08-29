@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Card, Button, Upload, Select, message, Table, Tag, Progress, Typography, Empty, Input, Radio } from 'antd';
-import { FilePdfOutlined, BookOutlined, ThunderboltOutlined, FileTextOutlined } from '@ant-design/icons';
+import { Card, Button, Upload, Select, message, Table, Tag, Progress, Typography, Empty, Input, Radio, Popconfirm } from 'antd';
+import { FilePdfOutlined, BookOutlined, ThunderboltOutlined, FileTextOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { parseFile } from '../../utils/fileParser';
 import { generateOutlineFromText, parseOutlineList } from '../../utils/mockAI';
@@ -45,6 +45,8 @@ export function ImportStandard() {
     setSkillType,
     addStandardFile,
     addMaterialFile,
+    removeStandardFile,
+    removeMaterialFile,
     updateFileStatus,
     setOutlineItems,
     mergeOutlineItems,
@@ -151,7 +153,7 @@ export function ImportStandard() {
     }, 150);
   };
 
-  const fileColumns = [
+  const makeFileColumns = (onDelete: (id: string) => void) => [
     { title: '文件', dataIndex: 'name', key: 'name', ellipsis: true },
     {
       title: '类型',
@@ -183,6 +185,23 @@ export function ImportStandard() {
           <Tag>待解析</Tag>
         ),
     },
+    {
+      title: '操作',
+      key: 'action',
+      width: 80,
+      render: (_: unknown, record: FileItem) => (
+        <Popconfirm
+          title={`删除《${record.name}》？`}
+          description="删除后该文件将不再作为出题依据"
+          okText="删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+          onConfirm={() => onDelete(record.id)}
+        >
+          <Button type="text" danger size="small" icon={<DeleteOutlined />}>删除</Button>
+        </Popconfirm>
+      ),
+    },
   ];
 
   return (
@@ -208,11 +227,11 @@ export function ImportStandard() {
           <Table
             rowKey="id"
             size="small"
-            columns={fileColumns}
+            columns={makeFileColumns((id) => removeStandardFile(id))}
             dataSource={standardFiles}
             pagination={false}
             className="mt-4"
-            scroll={{ x: 480 }}
+            scroll={{ x: 560 }}
           />
         )}
       </Card>
@@ -238,11 +257,11 @@ export function ImportStandard() {
           <Table
             rowKey="id"
             size="small"
-            columns={fileColumns}
+            columns={makeFileColumns((id) => removeMaterialFile(id))}
             dataSource={materialFiles}
             pagination={false}
             className="mt-4"
-            scroll={{ x: 480 }}
+            scroll={{ x: 560 }}
           />
         )}
       </Card>
@@ -348,6 +367,18 @@ export function ImportStandard() {
             <div className="mb-3 flex items-center gap-2">
               <Tag color="green">共 {outlineItems.length} 项职业功能</Tag>
               <Tag color="blue">已生成考评点大纲</Tag>
+              <Popconfirm
+                title="清空整个大纲？"
+                description="清空后需重新导入/解析才能再次出题"
+                okText="清空"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => { setOutlineItems([]); message.success('已清空大纲'); }}
+              >
+                <Button type="link" danger size="small" icon={<DeleteOutlined />} className="ml-auto">
+                  清空大纲
+                </Button>
+              </Popconfirm>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {outlineItems.map((item) => (

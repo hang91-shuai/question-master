@@ -121,6 +121,8 @@ export interface AppState {
   logout: () => void;
   addStandardFile: (file: FileItem) => void;
   addMaterialFile: (file: FileItem) => void;
+  removeStandardFile: (id: string) => void;
+  removeMaterialFile: (id: string) => void;
   updateFileStatus: (id: string, status: FileItem['status'], content?: string) => void;
   setOutlineItems: (items: OutlineItem[]) => void;
   mergeOutlineItems: (items: OutlineItem[]) => void;
