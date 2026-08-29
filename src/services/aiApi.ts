@@ -60,7 +60,7 @@ export function buildPrompt(
     : '';
 
   const dedupSection = dedupText
-    ? `\n【已出题目·请避开以下知识点，不要重复出相似题】
+    ? `\n【已出题目·必须避开以下已有题目，不得重复或近似出题】
 ${dedupText}
 `
     : '';
@@ -100,7 +100,8 @@ ${configText}
 3. 题目必须严格贴合上述大纲中已列出的知识点，不能超出本次范围、不能泛泛而谈。
 4. 严格依托教材原文，不超纲、不臆造。
 5. 答案解析不得敷衍，须有实质内容。
-6. 直接返回一个 JSON 数组，不要 Markdown 代码块，不要任何解释说明。
+6. 本批次内所有题目必须互不重复：任何两道题的题干不得相同或高度相似；同一知识点不得重复考查同一考点。若需围绕同一知识点出多道题，必须从不同角度、不同场景或不同难度编写，且题干表述必须有明显区别。
+7. 直接返回一个 JSON 数组，不要 Markdown 代码块，不要任何解释说明。
 `;
 }
 
@@ -159,7 +160,16 @@ export async function generateQuestionsByAI(
     throw new Error('AI 返回的不是 JSON 数组');
   }
 
-  return parsed.map((item, index) => ({
+  // 运行时兜底去重：剔除本批次内题干完全相同的重复题（AI 偶发偷懒时保证不重复入库）
+  const seen = new Set<string>();
+  const uniqueItems = parsed.filter((item) => {
+    const key = String(item.content || '').trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return uniqueItems.map((item, index) => ({
     id: `ai_${Date.now()}_${index}`,
     type: item.type || 'single',
     level,
