@@ -1,4 +1,4 @@
-import type { QuestionBank } from '../types';
+import type { Question, QuestionBank } from '../types';
 
 // 云函数代理地址（HTTP 网关 /api 路径）
 // 云函数在服务端转发对 PostgREST 数据库 API 的请求，从而绕开浏览器 CORS。
@@ -109,6 +109,46 @@ export async function syncBanksToCloud(banks: QuestionBank[]): Promise<void> {
     method: 'POST',
     body: rows,
     prefer: 'return=minimal',
+  });
+}
+
+/**
+ * 对题库按「题干内容」去重。
+ * 说明：云端/本地题库可能因多次导入同一批题而产生「内容相同但 id 不同」的重复题，
+ * 按 id 去重无法消除，需按内容去重。
+ * 每个重复组内优先保留「答案、解析、选项」更完整的那一题，其余删除。
+ * 返回新数组（不改原对象）。
+ */
+export function dedupeBanksByContent(banks: QuestionBank[]): QuestionBank[] {
+  // 质量评分：答案完整 +2，解析完整 +1，选项>=2 +1
+  const score = (q: Question) => {
+    let s = 0;
+    if (q.answer && String(q.answer).trim()) s += 2;
+    if (q.analysis && String(q.analysis).trim()) s += 1;
+    if (Array.isArray(q.options) && q.options.length >= 2) s += 1;
+    return s;
+  };
+
+  return banks.map((bank) => {
+    const groups = new Map<string, Question[]>();
+    for (const q of bank.questions) {
+      const key = (q.content || '').trim() || q.id;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(q);
+    }
+
+    const kept: Question[] = [];
+    for (const [, list] of groups) {
+      if (list.length === 1) {
+        kept.push(list[0]);
+      } else {
+        // 重复组：保留质量最高的那道
+        const best = [...list].sort((a, b) => score(b) - score(a))[0];
+        kept.push(best);
+      }
+    }
+
+    return { ...bank, questions: kept, questionCount: kept.length };
   });
 }
 

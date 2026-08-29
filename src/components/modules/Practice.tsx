@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Button, Select, InputNumber, Checkbox, Radio, Tag, message,
   Progress, Empty, Alert, Space, Divider, Result, Modal, Input, Badge, Segmented,
@@ -47,10 +47,24 @@ interface PracticeAnswer {
   unscored?: boolean; // 本题无标准答案（answer 为占位符），不参与判分
 }
 
-// 解析用户答案（选项文本 或 "A. 文本" 或字母）→ 选项字母集合
-const parseToLetters = (input: string, options: string[]): Set<string> => {
+const getOptionLetter = (idx: number) => String.fromCharCode(65 + idx);
+
+// 解析标准答案 → 选项字母集合（支持 "A" / "A,B" / "A,B,C" 或选项文本）
+const parseAnswerToLetters = (answer: string, options: string[]): Set<string> | null => {
+  const trimmed = answer.trim();
+  if (!trimmed || trimmed === '略' || trimmed === '无' || trimmed === 'NONE') return null;
+
   const letters = new Set<string>();
-  const parts = input.split(/[,，、;；\s]+/).filter(Boolean);
+
+  // 1) 先尝试整体匹配单个选项文本（避免文本内部含逗号/顿号被错误拆分）
+  const exactIdx = options.findIndex((o) => o.replace(/\s+/g, '') === trimmed.replace(/\s+/g, ''));
+  if (exactIdx >= 0) {
+    letters.add(getOptionLetter(exactIdx));
+    return letters;
+  }
+
+  // 2) 按分隔符拆分（标准答案通常用字母或 "A,B" 格式）
+  const parts = trimmed.split(/[,，、;；\s]+/).filter(Boolean);
   for (const part of parts) {
     const m = part.match(/^\s*([A-Za-z])(?:[.．、\s]|$)/);
     if (m) {
@@ -58,33 +72,10 @@ const parseToLetters = (input: string, options: string[]): Set<string> => {
       continue;
     }
     // 尝试匹配选项文本
-    const idx = options.findIndex((o) => o.trim() === part.trim());
-    if (idx >= 0) letters.add(String.fromCharCode(65 + idx));
-  }
-  return letters;
-};
-
-// 标准答案（可能存字母 "A,B" 或选项文本 "选项甲,选项乙"）→ 选项字母集合
-const parseAnswerToLetters = (answer: string, options: string[]): Set<string> | null => {
-  const trimmed = answer.replace(/\s+/g, '').toUpperCase();
-  if (!trimmed || trimmed === '略' || trimmed === '无' || trimmed === 'NONE') return null;
-  const parts = answer.split(/[,，、;；\s]+/).filter(Boolean);
-  const letters = new Set<string>();
-  let usedTextMatch = false;
-  for (const part of parts) {
-    const clean = part.replace(/^[A-Za-z][.．、\s]*/, '');
-    const m = part.match(/^\s*([A-Za-z])(?:[.．、\s]|$)/);
-    if (m) {
-      letters.add(m[1].toUpperCase());
-      usedTextMatch = usedTextMatch || clean.length === 0;
-      continue;
-    }
     const idx = options.findIndex((o) => o.replace(/\s+/g, '') === part.replace(/\s+/g, ''));
-    if (idx >= 0) {
-      letters.add(String.fromCharCode(65 + idx));
-      usedTextMatch = true;
-    }
+    if (idx >= 0) letters.add(getOptionLetter(idx));
   }
+
   if (letters.size === 0) return null;
   return letters;
 };
@@ -126,6 +117,8 @@ export function Practice() {
 
   // 错题本筛选
   const [wrongBankFilter, setWrongBankFilter] = useState<string | undefined>();
+  // 是否有未完成的练习进度（首页显示"继续上次答题"）
+  const [hasSavedPractice, setHasSavedPractice] = useState(false);
 
   const bank = useMemo(
     () => (bankId ? questionBanks.find((b) => b.id === bankId) : undefined),
@@ -135,10 +128,20 @@ export function Practice() {
   // 当前用户标识
   const userId = currentUserName || 'guest';
 
-  // 可选客观题（已审核通过）
+  // 可选客观题（已审核通过，按 id + 内容双重去重，避免重复题目撞车）
   const available = useMemo(() => {
     if (!bank) return [];
-    return bank.questions.filter((q) => PRACTICE_TYPES.includes(q.type) && q.status === 'approved');
+    const seenIds = new Set<string>();
+    const seenContent = new Set<string>();
+    return bank.questions.filter((q) => {
+      if (!PRACTICE_TYPES.includes(q.type) || q.status !== 'approved') return false;
+      if (seenIds.has(q.id)) return false;
+      const contentKey = (q.content || '').trim();
+      if (seenContent.has(contentKey)) return false;
+      seenIds.add(q.id);
+      seenContent.add(contentKey);
+      return true;
+    });
   }, [bank]);
 
   const availableCounts = useMemo(() => {
@@ -209,6 +212,7 @@ export function Practice() {
 
   const beginPractice = (picked: Question[]) => {
     if (picked.length === 0) { message.warning('没有可组卷的题目'); return; }
+    clearSavedPractice();
     setQuestions(picked);
     // 记录每题所属题库（标准卷/自由刷题来自当前选中题库）
     const map: Record<string, string> = {};
@@ -226,6 +230,7 @@ export function Practice() {
   const startWrongPractice = () => {
     const pairs = wrongQuestionsDetail.map((d) => ({ wrong: d.wrong, question: d.question }));
     if (pairs.length === 0) return;
+    clearSavedPractice();
     const shuffled = shuffleQ ? shuffleArray(pairs) : pairs;
     setPracticeWrongIds(shuffled.map((p) => p.wrong.id));
     // 记录每题所属题库（来自错题本记录的 bankId）
@@ -262,7 +267,8 @@ export function Practice() {
     // 单选题 / 多选题：将标准答案与用户答案都归一化为"选项字母集合"再比对
     const stdLetters = parseAnswerToLetters(actual, options);
     if (!stdLetters) return { correct: false, actual, unscored: true };
-    const userLetters = parseToLetters(ua, options);
+    // curAnswer 现在保存的是字母（单选 "A"，多选 "A,B"）
+    const userLetters = new Set(ua.split(/[,，、;；\s]+/).filter(Boolean).map((c) => c.toUpperCase()));
     const same =
       stdLetters.size > 0 &&
       userLetters.size > 0 &&
@@ -271,17 +277,23 @@ export function Practice() {
     return { correct: same, actual };
   };
 
-  const submitCurrent = () => {
-    const q = currentQuestion;
-    if (!q) return;
-    if (curAnswer.trim() === '') { message.warning('请先作答本题'); return; }
-    const { correct, actual, unscored } = checkCorrect(q, curAnswer);
-    const newAnswers = [...answers];
-    const idx = newAnswers.findIndex((x) => x.questionId === q.id);
-    const entry: PracticeAnswer = { questionId: q.id, userAnswer: curAnswer, correct, actual, unscored };
-    if (idx >= 0) newAnswers[idx] = entry; else newAnswers.push(entry);
+  // 保存/更新某题的作答记录（用于提交本题、切题自动保存、交卷）
+  const saveAnswerForQuestion = (q: Question, answer: string, silent = false) => {
+    if (!q || answer.trim() === '') return;
+    const { correct, actual, unscored } = checkCorrect(q, answer);
+    let changed = false;
+    const newAnswers = answers.map((x) => {
+      if (x.questionId === q.id) {
+        changed = changed || x.userAnswer !== answer;
+        return { questionId: q.id, userAnswer: answer, correct, actual, unscored };
+      }
+      return x;
+    });
+    if (!newAnswers.some((x) => x.questionId === q.id)) {
+      newAnswers.push({ questionId: q.id, userAnswer: answer, correct, actual, unscored });
+      changed = true;
+    }
     setAnswers(newAnswers);
-    if (mode === 'immediate') setRevealed(true);
 
     // 答错 → 自动收进错题本（用该题所属题库）；无标准答案的题不判错，不进错题本
     if (!correct && !unscored) {
@@ -293,6 +305,19 @@ export function Practice() {
     if (wrongId) {
       bumpWrongStats(wrongId, correct);
     }
+
+    if (!silent) {
+      if (changed) message.success(correct ? '答对了！' : '已记录本题');
+      if (!correct && !unscored && changed) message.info('答错了，已自动加入错题本');
+    }
+  };
+
+  const submitCurrent = () => {
+    const q = currentQuestion;
+    if (!q) return;
+    if (curAnswer.trim() === '') { message.warning('请先作答本题'); return; }
+    saveAnswerForQuestion(q, curAnswer, true);
+    if (mode === 'immediate') setRevealed(true);
   };
 
   const manualAddWrong = (q: Question) => {
@@ -306,16 +331,27 @@ export function Practice() {
   };
 
   const nextQuestion = () => {
+    const q = currentQuestion;
+    // 当前题已作答但未记录时，切题前自动保存，避免答案丢失
+    if (q && curAnswer.trim() !== '') saveAnswerForQuestion(q, curAnswer, true);
     if (index < questions.length - 1) {
-      setIndex(index + 1);
-      setCurAnswer('');
-      setRevealed(false);
+      const nextIdx = index + 1;
+      const nextQ = questions[nextIdx];
+      const nextAns = answers.find((a) => a.questionId === nextQ.id);
+      setIndex(nextIdx);
+      setCurAnswer(nextAns?.userAnswer || '');
+      setRevealed(mode === 'immediate' ? !!nextAns : false);
     } else {
+      // 完成全部题目，清除保存的练习进度
+      clearSavedPractice();
       setView('result');
     }
   };
 
   const prevQuestion = () => {
+    const q = currentQuestion;
+    // 切回上一题前也保存当前题作答
+    if (q && curAnswer.trim() !== '') saveAnswerForQuestion(q, curAnswer, true);
     if (index > 0) {
       setIndex(index - 1);
       const prevAns = answers.find((a) => a.questionId === questions[index - 1].id);
@@ -324,7 +360,72 @@ export function Practice() {
     }
   };
 
+  // ---------- 练习进度持久化（下次可继续上次答题） ----------
+  const SAVE_KEY = () => `qm_practice_${userId}`;
+
+  const loadSavedPractice = (): {
+    questions: Question[]; index: number; answers: PracticeAnswer[];
+    questionBankIds: Record<string, string>; questionWrongMap: Record<string, string>;
+    practiceWrongIds: string[]; mode: AnswerMode;
+  } | null => {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY());
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data.questions) || data.questions.length === 0) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  };
+
+  const clearSavedPractice = () => {
+    try { localStorage.removeItem(SAVE_KEY()); } catch { /* ignore */ }
+    setHasSavedPractice(false);
+  };
+
+  // 保存当前进度，返回首页，下次可继续
+  const leavePractice = () => {
+    const q = currentQuestion;
+    // 保存未提交的当前题
+    if (q && curAnswer.trim() !== '') saveAnswerForQuestion(q, curAnswer, true);
+    try {
+      localStorage.setItem(SAVE_KEY(), JSON.stringify({
+        questions, index, answers,
+        questionBankIds, questionWrongMap, practiceWrongIds, mode,
+      }));
+      setHasSavedPractice(true);
+    } catch { /* ignore */ }
+    setView('home');
+  };
+
+  // 继续上次未完成的练习
+  const resumePractice = () => {
+    const saved = loadSavedPractice();
+    if (!saved) { message.info('没有上次未完成的答题'); return; }
+    setQuestions(saved.questions);
+    setQuestionBankIds(saved.questionBankIds);
+    setQuestionWrongMap(saved.questionWrongMap);
+    setPracticeWrongIds(saved.practiceWrongIds);
+    setAnswers(saved.answers);
+    const restoredMode: AnswerMode = saved.mode || 'immediate';
+    setMode(restoredMode);
+    setIndex(Math.min(saved.index, saved.questions.length - 1));
+    const restoredQ = saved.questions[Math.min(saved.index, saved.questions.length - 1)];
+    const restoredAns = saved.answers.find((a) => a.questionId === restoredQ?.id);
+    setCurAnswer(restoredAns?.userAnswer || '');
+    setRevealed(restoredMode === 'immediate' ? !!restoredAns : false);
+    setView('answer');
+  };
+
+  // 挂载时如果有未完成练习，提示是否继续
+  useEffect(() => {
+    const saved = loadSavedPractice();
+    setHasSavedPractice(!!saved);
+  }, [userId]); // 仅登录/挂载时检测一次
+
   const restart = () => {
+    clearSavedPractice();
     setView('home');
     setQuestions([]);
     setAnswers([]);
@@ -501,7 +602,23 @@ export function Practice() {
               </button>
             </div>
 
-            <div className="text-center text-xs text-gray-400 mt-5">
+            {/* 继续上次未完成的答题 */}
+            {hasSavedPractice && (
+              <div className="mt-4">
+                <Button
+                  block
+                  size="large"
+                  icon={<PlayCircleOutlined />}
+                  className="!border-[#1e6fb5] !text-[#1e6fb5] hover:!bg-blue-50"
+                  onClick={resumePractice}
+                >
+                  继续上次答题
+                </Button>
+                <div className="text-center text-[11px] text-gray-400 mt-1">若上次答题中途退出，可从这里接着刷</div>
+              </div>
+            )}
+
+            <div className="text-center text-xs text-gray-400 mt-4">
               提示：答题答错的题目会自动收进错题本；答对的题如果觉得没掌握，也可以手动加入错题本反复练习。
             </div>
           </div>
@@ -581,6 +698,15 @@ export function Practice() {
             {/* 顶部：进度 */}
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
               <div className="flex items-center gap-2">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<ArrowLeftOutlined />}
+                  className="!text-gray-500 hover:!text-[#1e6fb5]"
+                  onClick={leavePractice}
+                >
+                  退出
+                </Button>
                 <Tag color={typeColor[currentQuestion.type]}>{typeLabels[currentQuestion.type]}</Tag>
                 {practiceWrongIds.length > 0 && <Tag color="red">错题练习</Tag>}
               </div>
@@ -598,23 +724,29 @@ export function Practice() {
               {currentQuestion.type === 'single' && (
                 <Radio.Group value={curAnswer} onChange={(e) => setCurAnswer(e.target.value)} style={{ width: '100%' }}>
                   <Space direction="vertical" style={{ width: '100%' }}>
-                    {(currentQuestion.options || []).map((opt) => (
-                      <Radio key={opt} value={opt} className="w-full py-2.5 px-3 rounded-xl border border-gray-100 hover:border-blue-300 hover:bg-blue-50/60 transition-colors">
-                        {opt}
-                      </Radio>
-                    ))}
+                    {(currentQuestion.options || []).map((opt, idx) => {
+                      const letter = getOptionLetter(idx);
+                      return (
+                        <Radio key={letter} value={letter} className="w-full py-2.5 px-3 rounded-xl border border-gray-100 hover:border-blue-300 hover:bg-blue-50/60 transition-colors">
+                          {letter}. {opt}
+                        </Radio>
+                      );
+                    })}
                   </Space>
                 </Radio.Group>
               )}
 
               {currentQuestion.type === 'multiple' && (
-                <Checkbox.Group value={curAnswer ? curAnswer.split(',') : []} onChange={(v) => setCurAnswer((v as string[]).join(','))} style={{ width: '100%' }}>
+                <Checkbox.Group value={curAnswer ? curAnswer.split(/[,，、;；\s]+/) : []} onChange={(v) => setCurAnswer((v as string[]).join(','))} style={{ width: '100%' }}>
                   <Space direction="vertical" style={{ width: '100%' }}>
-                    {(currentQuestion.options || []).map((opt) => (
-                      <Checkbox key={opt} value={opt} className="w-full py-2.5 px-3 rounded-xl border border-gray-100 hover:border-blue-300 hover:bg-blue-50/60 transition-colors">
-                        {opt}
-                      </Checkbox>
-                    ))}
+                    {(currentQuestion.options || []).map((opt, idx) => {
+                      const letter = getOptionLetter(idx);
+                      return (
+                        <Checkbox key={letter} value={letter} className="w-full py-2.5 px-3 rounded-xl border border-gray-100 hover:border-blue-300 hover:bg-blue-50/60 transition-colors">
+                          {letter}. {opt}
+                        </Checkbox>
+                      );
+                    })}
                   </Space>
                 </Checkbox.Group>
               )}
@@ -696,8 +828,8 @@ export function Practice() {
             <div className="flex items-center justify-between gap-2 mt-2 flex-wrap">
               <Button icon={<ArrowLeftOutlined />} onClick={prevQuestion} disabled={index === 0}>上一题</Button>
               <div className="flex items-center gap-2 flex-wrap justify-end">
-                {mode === 'batch' && (
-                  <Button onClick={() => setView('result')}>交卷看答案</Button>
+                {index < questions.length - 1 && (
+                  <Button onClick={() => setView('result')}>交卷看结果</Button>
                 )}
                 <Button type="primary" size="large" className="!bg-[#1e6fb5]" onClick={nextQuestion}>
                   {index < questions.length - 1 ? (<><span className="mr-1">下一题</span><ArrowRightOutlined /></>) : ('完成看结果')}

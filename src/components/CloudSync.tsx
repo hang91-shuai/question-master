@@ -1,12 +1,23 @@
 import { useState } from 'react';
 import { Card, Button, message, Alert, Tooltip } from 'antd';
-import { CloudUploadOutlined, CloudDownloadOutlined, CloudServerOutlined } from '@ant-design/icons';
+import {
+  CloudUploadOutlined,
+  CloudDownloadOutlined,
+  CloudServerOutlined,
+  ClearOutlined,
+} from '@ant-design/icons';
 import { useAppStore } from '../store/useAppStore';
-import { isCloudConfigured, syncBanksToCloud, fetchBanksFromCloud } from '../services/cloudService';
+import {
+  isCloudConfigured,
+  syncBanksToCloud,
+  fetchBanksFromCloud,
+  dedupeBanksByContent,
+} from '../services/cloudService';
 
 export function CloudSync() {
   const questionBanks = useAppStore((s) => s.questionBanks);
   const addQuestionBank = useAppStore((s) => s.addQuestionBank);
+  const setQuestionBanks = useAppStore((s) => s.setQuestionBanks);
   const [syncing, setSyncing] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -46,6 +57,25 @@ export function CloudSync() {
     }
   };
 
+  const handleDedupe = () => {
+    if (questionBanks.length === 0) {
+      message.warning('暂无题库可去重，请先生成题库');
+      return;
+    }
+    const before = questionBanks.reduce((s, b) => s + b.questions.length, 0);
+    const deduped = dedupeBanksByContent(questionBanks);
+    const after = deduped.reduce((s, b) => s + b.questions.length, 0);
+    const removed = before - after;
+
+    if (removed === 0) {
+      message.success(`已检查 ${before} 题，未发现重复，无需去重`);
+      return;
+    }
+    // 写入本地 store，后续「同步题库到云端」上传的即为去重后的数据
+    setQuestionBanks(deduped);
+    message.success(`去重完成：${before} 题 → ${after} 题，已清理 ${removed} 道重复题`);
+  };
+
   return (
     <Card>
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -75,6 +105,11 @@ export function CloudSync() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2 shrink-0">
+          <Tooltip title="对本地题库按题干一键去重（内容相同仅保留一题，优先保留答案/解析最完整的那题），去重后点击「同步题库到云端」上传即生效">
+            <Button icon={<ClearOutlined />} onClick={handleDedupe} disabled={questionBanks.length === 0}>
+              一键去重
+            </Button>
+          </Tooltip>
           <Tooltip title="把当前题库上传到云端，供所有访问者刷题">
             <Button
               type="primary"

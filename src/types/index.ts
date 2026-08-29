@@ -129,6 +129,7 @@ export interface AppState {
   addQuestionBank: (bank: QuestionBank) => void;
   appendQuestionsToBank: (bankId: string, questions: Question[]) => void;
   mergeQuestionBanks: (banks: QuestionBank[]) => void;
+  setQuestionBanks: (banks: QuestionBank[]) => void;
   removeQuestionBank: (bankId: string) => void;
   updateQuestionStatus: (bankId: string, qId: string, status: Question['status'], reason?: string) => void;
   batchUpdateQuestionStatus: (bankId: string, ids: string[], status: Question['status'], reason?: string) => void;

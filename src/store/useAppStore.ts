@@ -108,14 +108,25 @@ export const useAppStore = create<AppState>()(
 
       mergeQuestionBanks: (banks: QuestionBank[]) =>
         set((state) => {
-          const existingIds = new Set(state.questionBanks.map((b) => b.id));
-          const newBanks = banks.filter((b) => !existingIds.has(b.id));
-          if (newBanks.length === 0) return state;
+          if (banks.length === 0) return state;
+          // 云端数据覆盖本地同 id 的题库，保证登录后以云端为准（跨设备同步最新题库）
+          const cloudIds = new Set(banks.map((b) => b.id));
+          const kept = state.questionBanks.filter((b) => !cloudIds.has(b.id));
+          const merged = [...kept, ...banks];
           return {
-            questionBanks: [...state.questionBanks, ...newBanks],
-            selectedBankId: state.selectedBankId ?? newBanks[0]?.id,
+            questionBanks: merged,
+            selectedBankId: state.selectedBankId ?? banks[0]?.id,
           };
         }),
+
+      setQuestionBanks: (banks: QuestionBank[]) =>
+        set((state) => ({
+          questionBanks: banks,
+          selectedBankId:
+            state.selectedBankId && banks.some((b) => b.id === state.selectedBankId)
+              ? state.selectedBankId
+              : (banks[banks.length - 1]?.id ?? null),
+        })),
 
       removeQuestionBank: (bankId: string) =>
         set((state) => {
