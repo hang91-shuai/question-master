@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useEffect } from 'react';
 import { Input, Button, message, Tabs, Alert } from 'antd';
 import { UserOutlined, LockOutlined, ArrowRightOutlined, SettingOutlined, IdcardOutlined, TeamOutlined } from '@ant-design/icons';
 import { GraduationCap, BookOpen, Target, TrendingUp } from 'lucide-react';
@@ -24,6 +25,12 @@ export function Login() {
       // 云端加载失败不阻塞登录
     }
   };
+
+  // 页面打开即自动拉取一次云端题库，保证游客/考生都能拿到最新题库（本地缓存若过期会被云端覆盖）
+  useEffect(() => {
+    loadCloudBanks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');

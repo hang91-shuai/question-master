@@ -49,35 +49,59 @@ interface PracticeAnswer {
 
 const getOptionLetter = (idx: number) => String.fromCharCode(65 + idx);
 
-// 解析标准答案 → 选项字母集合（支持 "A" / "A,B" / "A,B,C" 或选项文本）
+// 解析标准答案 → 选项字母集合
+// 支持格式："A" / "A,B" / "A、B" / "B.通过机制..." / 完整选项文本（含顿号/逗号）等
 const parseAnswerToLetters = (answer: string, options: string[]): Set<string> | null => {
   const trimmed = answer.trim();
-  if (!trimmed || trimmed === '略' || trimmed === '无' || trimmed === 'NONE') return null;
+  if (!trimmed || ['略', '无', 'NONE'].includes(trimmed.toUpperCase())) return null;
 
   const letters = new Set<string>();
 
-  // 1) 先尝试整体匹配单个选项文本（避免文本内部含逗号/顿号被错误拆分）
-  const exactIdx = options.findIndex((o) => o.replace(/\s+/g, '') === trimmed.replace(/\s+/g, ''));
+  // 1) 纯字母答案："A" / "A,B" / "A、B" / "A B" / "A.B" 等
+  // 分隔符包含中文/英文逗号、顿号、分号、句点、空白
+  const tokens = trimmed.split(/[.,，、。．;；\s]+/).filter(Boolean);
+  if (tokens.length > 0 && tokens.every((t) => /^[A-Za-z]$/.test(t))) {
+    tokens.forEach((t) => letters.add(t.toUpperCase()));
+    return letters;
+  }
+
+  const normalized = trimmed.replace(/\s+/g, '');
+
+  // 2) 完整选项文本精确匹配（选项内容本身含顿号/逗号时优先整体匹配）
+  const exactIdx = options.findIndex((o) => o.replace(/\s+/g, '') === normalized);
   if (exactIdx >= 0) {
     letters.add(getOptionLetter(exactIdx));
     return letters;
   }
 
-  // 2) 按分隔符拆分（标准答案通常用字母或 "A,B" 格式）
-  const parts = trimmed.split(/[,，、;；\s]+/).filter(Boolean);
-  for (const part of parts) {
-    const m = part.match(/^\s*([A-Za-z])(?:[.．、\s]|$)/);
-    if (m) {
-      letters.add(m[1].toUpperCase());
-      continue;
+  // 3) 带字母前缀的选项文本，如 "B.通过机制设计..." / "B、通过机制设计..."
+  const prefixMatch = trimmed.match(/^\s*([A-Za-z])\s*[.．。、,，;；:\s]\s*(.+)$/);
+  if (prefixMatch) {
+    const [, letterPrefix, rest] = prefixMatch;
+    const restIdx = options.findIndex((o) => o.replace(/\s+/g, '') === rest.replace(/\s+/g, ''));
+    if (restIdx >= 0) {
+      letters.add(letterPrefix.toUpperCase());
+      return letters;
     }
-    // 尝试匹配选项文本
-    const idx = options.findIndex((o) => o.replace(/\s+/g, '') === part.replace(/\s+/g, ''));
-    if (idx >= 0) letters.add(getOptionLetter(idx));
   }
 
-  if (letters.size === 0) return null;
-  return letters;
+  // 4) 子串匹配：标准答案文本中包含某个选项文本
+  // 用于处理标点/空格差异导致无法精确匹配的情况
+  for (let i = 0; i < options.length; i++) {
+    const optNorm = options[i].replace(/\s+/g, '');
+    if (optNorm && normalized.includes(optNorm)) {
+      letters.add(getOptionLetter(i));
+    }
+  }
+  if (letters.size > 0) return letters;
+
+  // 5) 兜底：按分隔符拆开后取每部分开头的字母
+  for (const part of tokens) {
+    const m = part.match(/^\s*([A-Za-z])(?:[.．。、\s]|$)/);
+    if (m) letters.add(m[1].toUpperCase());
+  }
+
+  return letters.size > 0 ? letters : null;
 };
 
 // 答题模式：immediate=逐题即时对答案，batch=统一看答案
@@ -415,13 +439,19 @@ export function Practice() {
     const restoredAns = saved.answers.find((a) => a.questionId === restoredQ?.id);
     setCurAnswer(restoredAns?.userAnswer || '');
     setRevealed(restoredMode === 'immediate' ? !!restoredAns : false);
+    setHasSavedPractice(true);
     setView('answer');
   };
 
-  // 挂载时如果有未完成练习，提示是否继续
+  // 挂载时如有未完成的练习，自动恢复到退出时的题号和已答记录
   useEffect(() => {
     const saved = loadSavedPractice();
-    setHasSavedPractice(!!saved);
+    if (saved) {
+      resumePractice();
+    } else {
+      setHasSavedPractice(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]); // 仅登录/挂载时检测一次
 
   const restart = () => {
@@ -464,9 +494,23 @@ export function Practice() {
                 size="small"
                 icon={<LogoutOutlined />}
                 className="!text-white/80 hover:!text-white"
-                onClick={() => { setCurrentUser('guest', ''); }}
+                onClick={() => {
+                  // 退出登录前先保存当前答题进度（仅在答题页退出时）
+                  if (view === 'answer') {
+                    if (currentQuestion && curAnswer.trim() !== '') {
+                      saveAnswerForQuestion(currentQuestion, curAnswer, true);
+                    }
+                    try {
+                      localStorage.setItem(SAVE_KEY(), JSON.stringify({
+                        questions, index, answers,
+                        questionBankIds, questionWrongMap, practiceWrongIds, mode,
+                      }));
+                    } catch { /* ignore */ }
+                  }
+                  setCurrentUser('guest', '');
+                }}
               >
-                退出
+                退出登录
               </Button>
             </div>
           </div>
