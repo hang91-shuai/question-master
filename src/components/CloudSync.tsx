@@ -16,7 +16,7 @@ import {
 
 export function CloudSync() {
   const questionBanks = useAppStore((s) => s.questionBanks);
-  const addQuestionBank = useAppStore((s) => s.addQuestionBank);
+  const mergeQuestionBanks = useAppStore((s) => s.mergeQuestionBanks);
   const setQuestionBanks = useAppStore((s) => s.setQuestionBanks);
   const [syncing, setSyncing] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -47,8 +47,8 @@ export function CloudSync() {
         message.info('云端暂无可拉取的题库');
         return;
       }
-      // 拉取后合并到本地（避免重复）
-      banks.forEach((b) => addQuestionBank(b));
+      // 拉取后合并到本地（云端覆盖本地同 id，避免重复）
+      mergeQuestionBanks(banks);
       message.success(`已从云端拉取 ${banks.length} 个题库`);
     } catch (e: any) {
       message.error(e.message || '拉取失败');

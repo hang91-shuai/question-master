@@ -26,6 +26,9 @@ interface ProxyResponse {
 /**
  * 通过云函数代理调用数据库 PostgREST API。
  * 返回解析后的 JSON 数据（数组/对象）或 null（204 等无内容响应）。
+ *
+ * 注意：云函数网关对单次响应体大小有限制（实测约 1MB 左右会被截断），
+ * 因此调用方应避免一次拉取超大响应，必须分批/逐条拉取。
  */
 async function proxyRequest(req: ProxyRequest): Promise<any> {
   if (!PROXY_URL) {
@@ -72,10 +75,23 @@ async function proxyRequest(req: ProxyRequest): Promise<any> {
 }
 
 /**
- * 将本地题库同步（覆盖）到云端
+ * 分批处理辅助：把数组按每批 size 个分成多批，每批内部并发执行，
+ * 批与批之间串行，避免一次性发太多请求或单次响应体过大。
+ */
+async function runInBatches<T>(items: T[], batchSize: number, fn: (item: T) => Promise<void>) {
+  for (let i = 0; i < items.length; i += batchSize) {
+    const chunk = items.slice(i, i + batchSize);
+    await Promise.all(chunk.map(fn));
+  }
+}
+
+/**
+ * 将本地题库同步（覆盖）到云端。
+ * 采用「逐条覆盖」策略：先查询云端现有记录并删除，再逐条插入本地题库。
+ * 避免一次性提交超大请求体 / 返回超大数据导致网关截断。
  */
 export async function syncBanksToCloud(banks: QuestionBank[]): Promise<void> {
-  // 1. 查询云端现有记录
+  // 1. 查询云端现有记录（只查轻量 id 字段）
   const existing = await proxyRequest({
     path: '/question_banks',
     method: 'GET',
@@ -94,7 +110,7 @@ export async function syncBanksToCloud(banks: QuestionBank[]): Promise<void> {
     });
   }
 
-  // 3. 批量插入本地题库
+  // 3. 逐条插入本地题库（每条一个请求，避免单次请求体过大）
   const rows = banks.map((b) => ({
     id: b.id,
     name: b.name,
@@ -104,12 +120,14 @@ export async function syncBanksToCloud(banks: QuestionBank[]): Promise<void> {
     questions: b.questions,
   }));
 
-  await proxyRequest({
-    path: '/question_banks',
-    method: 'POST',
-    body: rows,
-    prefer: 'return=minimal',
-  });
+  await runInBatches(rows, 2, (row) =>
+    proxyRequest({
+      path: '/question_banks',
+      method: 'POST',
+      body: row,
+      prefer: 'return=minimal',
+    })
+  );
 }
 
 /**
@@ -153,26 +171,47 @@ export function dedupeBanksByContent(banks: QuestionBank[]): QuestionBank[] {
 }
 
 /**
- * 从云端拉取题库
+ * 从云端拉取题库。
+ * 由于云函数网关对单次响应体大小有限制（实测约 1MB 会被截断），
+ * 不能一次 select=* 拉全部题库（1.6MB+ 会被截断导致解析失败）。
+ * 改为两阶段：
+ *   1. 先拉所有题库的轻量元数据（id/name/type/created_at/question_count）
+ *   2. 再按 id 逐条拉取完整数据（含题目），每条一个请求
+ * 这样每条响应都远小于网关限制，保证拉取稳定。
  */
 export async function fetchBanksFromCloud(): Promise<QuestionBank[]> {
-  const data = await proxyRequest({
+  // 阶段一：拉取轻量元数据列表
+  const meta = await proxyRequest({
     path: '/question_banks',
     method: 'GET',
-    query: 'select=*',
+    query: 'select=id,name,type,created_at,question_count',
   });
 
-  const rows: any[] = Array.isArray(data) ? data : [];
+  const rows: any[] = Array.isArray(meta) ? meta : [];
+  if (rows.length === 0) return [];
 
-  return rows.map((row) => {
-    const questions = Array.isArray(row.questions) ? row.questions : [];
-    return {
-      id: row.id,
-      name: row.name,
-      type: row.type,
-      createdAt: row.created_at,
-      questionCount: typeof row.question_count === 'number' ? row.question_count : questions.length,
+  // 阶段二：逐条拉取完整数据（每条一个请求，2 并发）
+  const banks: QuestionBank[] = [];
+  await runInBatches(rows, 2, async (row) => {
+    const full = await proxyRequest({
+      path: '/question_banks',
+      method: 'GET',
+      query: `select=*&id=eq.${encodeURIComponent(row.id)}`,
+    });
+    const list = Array.isArray(full) ? full : [];
+    if (list.length === 0) return;
+    const r = list[0];
+    const questions = Array.isArray(r.questions) ? r.questions : [];
+    banks.push({
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      createdAt: r.created_at,
+      questionCount:
+        typeof r.question_count === 'number' ? r.question_count : questions.length,
       questions,
-    } as QuestionBank;
+    } as QuestionBank);
   });
+
+  return banks;
 }
