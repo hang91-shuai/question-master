@@ -3,6 +3,7 @@ import type { Key } from 'react';
 import { Card, Select, Table, Tag, Button, Radio, Input, message, Modal, Typography, Badge, Space } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, EditOutlined, AuditOutlined, CheckOutlined } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
+import { cleanOptionText } from '../../utils/questionCleaner';
 import type { Question, QuestionBank } from '../../types';
 
 const { TextArea } = Input;
@@ -264,7 +265,7 @@ export function OnlineReview() {
               <div>
                 <Text type="secondary">选项：</Text>
                 {editModal.q.options.map((o, i) => (
-                  <Paragraph key={i} className="mb-0">{String.fromCharCode(65 + i)}. {o}</Paragraph>
+                  <Paragraph key={i} className="mb-0">{String.fromCharCode(65 + i)}. {cleanOptionText(o)}</Paragraph>
                 ))}
               </div>
             )}

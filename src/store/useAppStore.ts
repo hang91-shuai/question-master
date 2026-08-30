@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { AppState, FileItem, OutlineItem, QuestionBank, ExamPlanItem, Question, StepKey, PersonalProfile, UserRole, UserAccount, WrongQuestion } from '../types';
+import { cleanQuestion, cleanQuestionBank, cleanQuestionBanks } from '../utils/questionCleaner';
 
 const defaultProfile: PersonalProfile = {
   name: '管理员',
@@ -94,7 +95,7 @@ export const useAppStore = create<AppState>()(
 
       addQuestionBank: (bank: QuestionBank) =>
         set((state) => ({
-          questionBanks: [...state.questionBanks, bank],
+          questionBanks: [...state.questionBanks, cleanQuestionBank(bank)],
           selectedBankId: bank.id,
         })),
 
@@ -104,7 +105,7 @@ export const useAppStore = create<AppState>()(
             bank.id === bankId
               ? {
                   ...bank,
-                  questions: [...bank.questions, ...questions],
+                  questions: [...bank.questions, ...questions.map(cleanQuestion)],
                   updatedAt: new Date().toISOString(),
                 }
               : bank
@@ -116,18 +117,19 @@ export const useAppStore = create<AppState>()(
         set((state) => {
           if (banks.length === 0) return state;
           // 云端数据覆盖本地同 id 的题库，保证登录后以云端为准（跨设备同步最新题库）
-          const cloudIds = new Set(banks.map((b) => b.id));
+          const cleaned = cleanQuestionBanks(banks);
+          const cloudIds = new Set(cleaned.map((b) => b.id));
           const kept = state.questionBanks.filter((b) => !cloudIds.has(b.id));
-          const merged = [...kept, ...banks];
+          const merged = [...kept, ...cleaned];
           return {
             questionBanks: merged,
-            selectedBankId: state.selectedBankId ?? banks[0]?.id,
+            selectedBankId: state.selectedBankId ?? cleaned[0]?.id,
           };
         }),
 
       setQuestionBanks: (banks: QuestionBank[]) =>
         set((state) => ({
-          questionBanks: banks,
+          questionBanks: cleanQuestionBanks(banks),
           selectedBankId:
             state.selectedBankId && banks.some((b) => b.id === state.selectedBankId)
               ? state.selectedBankId
@@ -229,6 +231,12 @@ export const useAppStore = create<AppState>()(
         userAccounts: state.userAccounts,
         wrongQuestions: state.wrongQuestions,
       }),
+      // 每次从 localStorage 恢复时自动清洗旧数据中可能存在的 A./B./C./D. 选项前缀
+      onRehydrateStorage: () => (state) => {
+        if (state && Array.isArray(state.questionBanks)) {
+          state.questionBanks = cleanQuestionBanks(state.questionBanks);
+        }
+      },
     }
   )
 );

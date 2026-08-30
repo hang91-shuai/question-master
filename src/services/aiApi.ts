@@ -1,4 +1,5 @@
 import type { OutlineItem, Question, QuestionType, TypeConfig } from '../types';
+import { cleanQuestion } from '../utils/questionCleaner';
 
 const BASE_URL = import.meta.env.VITE_AI_API_BASE_URL || '';
 const API_KEY = import.meta.env.VITE_AI_API_KEY || '';
@@ -89,19 +90,19 @@ ${configText}
 {
   "type": "single/multiple/judge 之一",
   "content": "题干",
-  "options": ["选项A", "选项B", "选项C", "选项D"],
+  "options": ["第一个选项内容", "第二个选项内容", "第三个选项内容", "第四个选项内容"],
   "answer": "正确答案",
   "analysis": "解析（50字以上，须说明正确项为何正确、错误项为何错误）",
   "outlineCode": "对应大纲编号，如01",
   "outlineName": "对应大纲名称，如数字化组织管理",
   "source": "教材出处，如《基础知识》P20"
 }
-2. 单选必须有 4 个选项；多选必须有 4-6 个选项，答案用顿号分隔多个选项字母（如"A、B、C"），且多选需全部选对才得分；判断题答案只能为"正确"或"错误"，选项固定为"正确、错误"，不得使用"对/错"。
-3. 题目必须严格贴合上述大纲中已列出的知识点，不能超出本次范围、不能泛泛而谈。
-4. 严格依托教材原文，不超纲、不臆造。
-5. 答案解析不得敷衍，须有实质内容。
-6. 本批次内所有题目必须互不重复：任何两道题的题干不得相同或高度相似；同一知识点不得重复考查同一考点。若需围绕同一知识点出多道题，必须从不同角度、不同场景或不同难度编写，且题干表述必须有明显区别。
-7. 直接返回一个 JSON 数组，不要 Markdown 代码块，不要任何解释说明。
+2. 单选必须有 4 个选项；多选必须有 4-6 个选项；判断题答案只能为"正确"或"错误"，选项固定为"正确、错误"，不得使用"对/错"。答案只用字母，如单选"A"，多选"A、B、C"。\n3. options 数组中的每个元素必须是选项正文本身，禁止带 A./B./C./D. 等前缀，前端会自动渲染 A/B/C/D 字母。例如正确写法："options": ["提高工作效率", "降低成本", "保证安全", "提升质量"]，错误写法："options": ["A. 提高工作效率", "B. 降低成本", ...]。
+4. 题目必须严格贴合上述大纲中已列出的知识点，不能超出本次范围、不能泛泛而谈。
+5. 严格依托教材原文，不超纲、不臆造。
+6. 答案解析不得敷衍，须有实质内容。
+7. 本批次内所有题目必须互不重复：任何两道题的题干不得相同或高度相似；同一知识点不得重复考查同一考点。若需围绕同一知识点出多道题，必须从不同角度、不同场景或不同难度编写，且题干表述必须有明显区别。
+8. 直接返回一个 JSON 数组，不要 Markdown 代码块，不要任何解释说明。
 `;
 }
 
@@ -169,20 +170,22 @@ export async function generateQuestionsByAI(
     return true;
   });
 
-  return uniqueItems.map((item, index) => ({
-    id: `ai_${Date.now()}_${index}`,
-    type: item.type || 'single',
-    level,
-    outlineCode: item.outlineCode || outlineItems[0]?.code || '',
-    outlineName: item.outlineName || outlineItems[0]?.name || '',
-    content: item.content || '',
-    options: Array.isArray(item.options) ? item.options : undefined,
-    answer: item.answer ?? '略',
-    analysis: item.analysis || '无',
-    difficulty: ['easy', 'medium', 'hard'].includes(item.difficulty)
-      ? item.difficulty
-      : 'medium',
-    source: item.source || `AI 大模型生成 (${modelKey})`,
-    status: 'pending',
-  })) as Question[];
+  return uniqueItems.map((item, index) =>
+    cleanQuestion({
+      id: `ai_${Date.now()}_${index}`,
+      type: item.type || 'single',
+      level,
+      outlineCode: item.outlineCode || outlineItems[0]?.code || '',
+      outlineName: item.outlineName || outlineItems[0]?.name || '',
+      content: item.content || '',
+      options: Array.isArray(item.options) ? item.options : undefined,
+      answer: item.answer ?? '略',
+      analysis: item.analysis || '无',
+      difficulty: ['easy', 'medium', 'hard'].includes(item.difficulty)
+        ? item.difficulty
+        : 'medium',
+      source: item.source || `AI 大模型生成 (${modelKey})`,
+      status: 'pending',
+    } as Question)
+  );
 }

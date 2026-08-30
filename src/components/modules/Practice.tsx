@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { shuffleArray } from '../../utils/mockAI';
+import { cleanOptionText } from '../../utils/questionCleaner';
 import type { Question, QuestionType } from '../../types';
 
 const ADMIN_PASSWORD = 'admin123';
@@ -772,7 +773,7 @@ export function Practice() {
                       const letter = getOptionLetter(idx);
                       return (
                         <Radio key={letter} value={letter} className="w-full py-2.5 px-3 rounded-xl border border-gray-100 hover:border-blue-300 hover:bg-blue-50/60 transition-colors">
-                          {letter}. {opt}
+                          {letter}. {cleanOptionText(opt)}
                         </Radio>
                       );
                     })}
@@ -787,7 +788,7 @@ export function Practice() {
                       const letter = getOptionLetter(idx);
                       return (
                         <Checkbox key={letter} value={letter} className="w-full py-2.5 px-3 rounded-xl border border-gray-100 hover:border-blue-300 hover:bg-blue-50/60 transition-colors">
-                          {letter}. {opt}
+                          {letter}. {cleanOptionText(opt)}
                         </Checkbox>
                       );
                     })}
