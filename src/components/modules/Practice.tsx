@@ -38,6 +38,12 @@ const typeColor: Record<QuestionType, string> = {
   case: 'gold', calc: 'cyan', blank: 'geekblue', ethics: 'magenta',
 };
 
+// 题型配色（十六进制，用于自定义大标签）
+const typeColorHex: Record<QuestionType, string> = {
+  single: '#1677ff', multiple: '#722ed1', judge: '#52c41a', short: '#fa8c16', essay: '#f5222d',
+  case: '#faad14', calc: '#13c2c2', blank: '#2f4554', ethics: '#eb2f96',
+};
+
 type View = 'home' | 'config' | 'answer' | 'result' | 'wrong';
 
 interface PracticeAnswer {
@@ -769,8 +775,9 @@ export function Practice() {
         {view === 'answer' && currentQuestion && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-8">
             {/* 顶部：进度 */}
-            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center mb-3 flex-wrap gap-y-2 gap-x-3">
+              {/* 左侧：退出 + 错题练习标识 */}
+              <div className="flex items-center gap-2 flex-1 basis-0 min-w-[80px]">
                 <Button
                   type="text"
                   size="small"
@@ -780,16 +787,23 @@ export function Practice() {
                 >
                   退出
                 </Button>
-                <Tag
-                  color={typeColor[currentQuestion.type]}
-                  style={{ fontSize: 16, fontWeight: 700, padding: '4px 14px', lineHeight: '1.5' }}
-                >
-                  {typeLabels[currentQuestion.type]}
-                </Tag>
                 {practiceWrongIds.length > 0 && <Tag color="red">错题练习</Tag>}
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500 text-xs sm:text-sm">第 {index + 1} / {questions.length} 题 · 已答 {answeredCount} 题</span>
+
+              {/* 中间：题型标签（更大更居中，切换时有动效） */}
+              <div className="flex-1 basis-0 flex justify-center min-w-0">
+                <div
+                  key={currentQuestion.type}
+                  className="type-tag-pop inline-flex items-center justify-center rounded-full px-5 sm:px-6 py-1.5 text-base sm:text-lg font-bold text-white shadow-sm whitespace-nowrap"
+                  style={{ backgroundColor: typeColorHex[currentQuestion.type] }}
+                >
+                  {typeLabels[currentQuestion.type]}
+                </div>
+              </div>
+
+              {/* 右侧：进度 + 答题卡 */}
+              <div className="flex items-center gap-2 flex-1 basis-0 justify-end min-w-[140px]">
+                <span className="text-gray-500 text-xs sm:text-sm whitespace-nowrap">第 {index + 1} / {questions.length} 题 · 已答 {answeredCount} 题</span>
                 <Button type="primary" ghost size="small" onClick={() => setAnswerSheetOpen(true)}>
                   答题卡
                 </Button>
