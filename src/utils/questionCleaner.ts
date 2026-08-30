@@ -91,3 +91,56 @@ export function cleanQuestionBank(bank: QuestionBank): QuestionBank {
 export function cleanQuestionBanks(banks: QuestionBank[]): QuestionBank[] {
   return banks.map(cleanQuestionBank);
 }
+
+/**
+ * 归一化题干：仅保留中文字符，用于相似度比较。
+ */
+function normalizeContent(text: string): string {
+  return (text || '').replace(/[^\u4e00-\u9fa5]/g, '').toLowerCase();
+}
+
+/**
+ * 编辑距离（Levenshtein）。
+ */
+function levenshtein(a: string, b: string): number {
+  if (a.length < b.length) [a, b] = [b, a];
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => i);
+  for (let j = 1; j <= b.length; j++) {
+    let prev = dp[0];
+    dp[0] = j;
+    for (let i = 1; i <= a.length; i++) {
+      const temp = dp[i];
+      dp[i] = a[i - 1] === b[j - 1] ? prev : Math.min(prev, dp[i], dp[i - 1]) + 1;
+      prev = temp;
+    }
+  }
+  return dp[a.length];
+}
+
+/**
+ * 判断两道题是否为同义/近似重复题。
+ * 仅比较题干中文字符的编辑距离相似度。
+ */
+export function isSimilarQuestion(a: Question, b: Question, threshold = 0.82): boolean {
+  const na = normalizeContent(a.content);
+  const nb = normalizeContent(b.content);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const maxLen = Math.max(na.length, nb.length);
+  if (maxLen === 0) return false;
+  const dist = levenshtein(na, nb);
+  return 1 - dist / maxLen >= threshold;
+}
+
+/**
+ * 去除列表中的同义/近似重复题，保留出现顺序靠前的题目。
+ */
+export function dedupSimilarQuestions(questions: Question[], threshold = 0.82): Question[] {
+  const result: Question[] = [];
+  for (const q of questions) {
+    if (!result.some((r) => isSimilarQuestion(r, q, threshold))) {
+      result.push(q);
+    }
+  }
+  return result;
+}

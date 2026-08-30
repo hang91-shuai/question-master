@@ -11,7 +11,7 @@ import {
 } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { shuffleArray } from '../../utils/mockAI';
-import { cleanOptionText } from '../../utils/questionCleaner';
+import { cleanOptionText, dedupSimilarQuestions } from '../../utils/questionCleaner';
 import type { Question, QuestionType } from '../../types';
 
 const ADMIN_PASSWORD = 'admin123';
@@ -139,6 +139,7 @@ export function Practice() {
   const [curAnswer, setCurAnswer] = useState('');
   const [answers, setAnswers] = useState<PracticeAnswer[]>([]);
   const [revealed, setRevealed] = useState(false);
+  const [answerSheetOpen, setAnswerSheetOpen] = useState(false);
 
   // 错题本筛选
   const [wrongBankFilter, setWrongBankFilter] = useState<string | undefined>();
@@ -222,7 +223,7 @@ export function Practice() {
     for (const t of PRACTICE_TYPES) {
       picked.push(...pickQuestions(t, STANDARD_QUOTA[t] || 0));
     }
-    beginPractice(picked);
+    beginPractice(picked, true);
   };
 
   const startFreePractice = () => {
@@ -232,16 +233,20 @@ export function Practice() {
     let pool = available.filter((q) => selectedTypes.includes(q.type));
     if (shuffleQ) pool = shuffleArray(pool);
     const picked = pool.slice(0, count);
-    beginPractice(picked);
+    beginPractice(picked, true);
   };
 
-  const beginPractice = (picked: Question[]) => {
+  const beginPractice = (picked: Question[], dedup = false) => {
     if (picked.length === 0) { message.warning('没有可组卷的题目'); return; }
     clearSavedPractice();
-    setQuestions(picked);
+    const finalQuestions = dedup ? dedupSimilarQuestions(picked, 0.82) : picked;
+    if (dedup && finalQuestions.length < picked.length) {
+      message.info(`已自动过滤 ${picked.length - finalQuestions.length} 道近似重复题`);
+    }
+    setQuestions(finalQuestions);
     // 记录每题所属题库（标准卷/自由刷题来自当前选中题库）
     const map: Record<string, string> = {};
-    for (const q of picked) map[q.id] = bankId || '';
+    for (const q of finalQuestions) map[q.id] = bankId || '';
     setQuestionBankIds(map);
     setIndex(0);
     setCurAnswer('');
@@ -383,6 +388,19 @@ export function Practice() {
       setCurAnswer(prevAns?.userAnswer || '');
       setRevealed(mode === 'immediate' ? !!prevAns : false);
     }
+  };
+
+  const jumpToQuestion = (targetIdx: number) => {
+    if (targetIdx < 0 || targetIdx >= questions.length) return;
+    const q = currentQuestion;
+    // 跳转前保存当前题作答
+    if (q && curAnswer.trim() !== '') saveAnswerForQuestion(q, curAnswer, true);
+    setIndex(targetIdx);
+    const targetQ = questions[targetIdx];
+    const targetAns = answers.find((a) => a.questionId === targetQ.id);
+    setCurAnswer(targetAns?.userAnswer || '');
+    setRevealed(mode === 'immediate' ? !!targetAns : false);
+    setAnswerSheetOpen(false);
   };
 
   // ---------- 练习进度持久化（下次可继续上次答题） ----------
@@ -752,10 +770,20 @@ export function Practice() {
                 >
                   退出
                 </Button>
-                <Tag color={typeColor[currentQuestion.type]}>{typeLabels[currentQuestion.type]}</Tag>
+                <Tag
+                  color={typeColor[currentQuestion.type]}
+                  style={{ fontSize: 16, fontWeight: 700, padding: '4px 14px', lineHeight: '1.5' }}
+                >
+                  {typeLabels[currentQuestion.type]}
+                </Tag>
                 {practiceWrongIds.length > 0 && <Tag color="red">错题练习</Tag>}
               </div>
-              <span className="text-gray-500 text-xs sm:text-sm">第 {index + 1} / {questions.length} 题 · 已答 {answeredCount} 题</span>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500 text-xs sm:text-sm">第 {index + 1} / {questions.length} 题 · 已答 {answeredCount} 题</span>
+                <Button type="primary" ghost size="small" onClick={() => setAnswerSheetOpen(true)}>
+                  答题卡
+                </Button>
+              </div>
             </div>
             <Progress percent={Math.round(((index + 1) / questions.length) * 100)} showInfo={false} strokeColor="#1e6fb5" />
 
@@ -883,6 +911,43 @@ export function Practice() {
             </div>
           </div>
         )}
+
+        {/* 答题卡 */}
+        <Modal
+          title="答题卡"
+          open={answerSheetOpen}
+          onCancel={() => setAnswerSheetOpen(false)}
+          footer={null}
+          centered
+          width="min(720px, 92vw)"
+        >
+          <div className="grid grid-cols-5 sm:grid-cols-8 gap-2 sm:gap-3">
+            {questions.map((q, i) => {
+              const answered = answers.some((a) => a.questionId === q.id);
+              const isCurrent = i === index;
+              return (
+                <button
+                  key={q.id}
+                  onClick={() => jumpToQuestion(i)}
+                  className={[
+                    'relative rounded-lg border-2 px-1 py-2 text-xs sm:text-sm font-medium transition-all',
+                    isCurrent ? 'border-[#1e6fb5] bg-blue-50 text-[#1e6fb5]' : 'border-gray-200 hover:border-blue-300',
+                    answered ? 'bg-green-50 border-green-400 text-green-700' : 'bg-white text-gray-700',
+                  ].join(' ')}
+                >
+                  <div className="leading-tight">{i + 1}</div>
+                  <div className="text-[10px] leading-tight mt-0.5 opacity-80">{typeShort[q.type]}</div>
+                  {answered && <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-500 rounded-full" />}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-4 flex items-center justify-center gap-4 text-xs text-gray-500">
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-green-500" />已做</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-[#1e6fb5]" />当前</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-gray-300" />未做</span>
+          </div>
+        </Modal>
 
         {view === 'answer' && !currentQuestion && <Empty description="没有可显示的题目" />}
 
