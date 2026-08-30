@@ -11,7 +11,7 @@ import {
 } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { shuffleArray } from '../../utils/mockAI';
-import { cleanOptionText, dedupSimilarQuestions } from '../../utils/questionCleaner';
+import { cleanOptionText, isSimilarQuestion } from '../../utils/questionCleaner';
 import type { Question, QuestionType } from '../../types';
 
 const ADMIN_PASSWORD = 'admin123';
@@ -203,9 +203,17 @@ export function Practice() {
   }, [questionBanks, myWrongByBank]);
 
   // ---------- 组卷 ----------
-  const pickQuestions = (type: QuestionType, need: number): Question[] => {
+  const pickQuestions = (type: QuestionType, need: number, used: Question[] = []): Question[] => {
     const pool = available.filter((q) => q.type === type);
-    return shuffleArray(pool).slice(0, need);
+    const shuffled = shuffleArray(pool);
+    const picked: Question[] = [];
+    for (const q of shuffled) {
+      if (picked.length >= need) break;
+      if (![...used, ...picked].some((u) => isSimilarQuestion(u, q, 0.82))) {
+        picked.push(q);
+      }
+    }
+    return picked;
   };
 
   const startStandardPaper = () => {
@@ -221,9 +229,9 @@ export function Practice() {
     }
     const picked: Question[] = [];
     for (const t of PRACTICE_TYPES) {
-      picked.push(...pickQuestions(t, STANDARD_QUOTA[t] || 0));
+      picked.push(...pickQuestions(t, STANDARD_QUOTA[t] || 0, picked));
     }
-    beginPractice(picked, true);
+    beginPractice(picked);
   };
 
   const startFreePractice = () => {
@@ -232,21 +240,23 @@ export function Practice() {
     if (selectedTypes.length === 0) { message.warning('请至少选择一种题型'); return; }
     let pool = available.filter((q) => selectedTypes.includes(q.type));
     if (shuffleQ) pool = shuffleArray(pool);
-    const picked = pool.slice(0, count);
-    beginPractice(picked, true);
+    const picked: Question[] = [];
+    for (const q of pool) {
+      if (picked.length >= count) break;
+      if (!picked.some((p) => isSimilarQuestion(p, q, 0.82))) {
+        picked.push(q);
+      }
+    }
+    beginPractice(picked);
   };
 
-  const beginPractice = (picked: Question[], dedup = false) => {
+  const beginPractice = (picked: Question[]) => {
     if (picked.length === 0) { message.warning('没有可组卷的题目'); return; }
     clearSavedPractice();
-    const finalQuestions = dedup ? dedupSimilarQuestions(picked, 0.82) : picked;
-    if (dedup && finalQuestions.length < picked.length) {
-      message.info(`已自动过滤 ${picked.length - finalQuestions.length} 道近似重复题`);
-    }
-    setQuestions(finalQuestions);
+    setQuestions(picked);
     // 记录每题所属题库（标准卷/自由刷题来自当前选中题库）
     const map: Record<string, string> = {};
-    for (const q of finalQuestions) map[q.id] = bankId || '';
+    for (const q of picked) map[q.id] = bankId || '';
     setQuestionBankIds(map);
     setIndex(0);
     setCurAnswer('');
