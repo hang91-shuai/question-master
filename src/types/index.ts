@@ -89,22 +89,21 @@ export interface WrongQuestion {
   wrongCount?: number; // 累计答错次数
 }
 
-export type UserRole = 'guest' | 'student' | 'admin';
-
-export interface UserAccount {
-  id: string;
-  username: string;
-  password: string;
-  name: string;
-  role: 'student' | 'admin';
-  createdAt: string;
+// 考生练习统计（按考生维度持久化，用于首页"我的进度"展示）
+export interface PracticeStats {
+  answeredCount: number; // 累计答题次数
+  correctCount: number; // 累计答对次数
+  practicedIds: string[]; // 已练过的题目（"bankId:questionId"去重记录，用于计算"已练多少题"）
 }
+
+export type UserRole = 'guest' | 'student' | 'admin';
 
 export interface AppState {
   currentStep: StepKey;
   currentUser: UserRole;
   currentUserName: string;
-  userAccounts: UserAccount[];
+  currentUserId: string; // 当前登录账号的云端 userId（考生 10001+，管理员 90001）
+  practiceView: boolean; // 管理员是否处于答题端视图（admin 双入口切换）
   standardFiles: FileItem[];
   materialFiles: FileItem[];
   outlineItems: OutlineItem[];
@@ -115,9 +114,10 @@ export interface AppState {
   selectedBankId: string | null;
   profile: PersonalProfile;
   wrongQuestions: WrongQuestion[];
+  practiceStats: Record<string, PracticeStats>; // key = userId
   setCurrentStep: (step: StepKey) => void;
-  setCurrentUser: (role: UserRole, name: string) => void;
-  registerAccount: (account: Omit<UserAccount, 'id' | 'createdAt'>) => boolean;
+  setCurrentUser: (role: UserRole, name: string, userId?: string) => void;
+  setPracticeView: (v: boolean) => void;
   logout: () => void;
   addStandardFile: (file: FileItem) => void;
   addMaterialFile: (file: FileItem) => void;
@@ -141,4 +141,7 @@ export interface AppState {
   addWrongQuestion: (entry: { userId: string; bankId: string; questionId: string; source: 'auto' | 'manual' }) => void;
   removeWrongQuestion: (id: string) => void;
   bumpWrongStats: (id: string, correct: boolean) => void;
+  recordPractice: (userId: string, bankId: string, questionId: string, correct: boolean) => void;
+  // 登录后从云端恢复该用户的错题本/练习统计（云端为主）
+  hydrateCloudUserData: (userId: string, wrongList: WrongQuestion[], stats: PracticeStats | null) => void;
 }

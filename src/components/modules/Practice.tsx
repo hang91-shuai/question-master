@@ -1,20 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Button, Select, InputNumber, Checkbox, Radio, Tag, message,
-  Progress, Empty, Alert, Space, Divider, Result, Modal, Input, Badge, Segmented,
+  Progress, Empty, Alert, Space, Divider, Result, Modal, Badge, Segmented,
 } from 'antd';
 import {
   PlayCircleOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ArrowLeftOutlined, ArrowRightOutlined, ReloadOutlined, TrophyOutlined,
   LogoutOutlined, SettingOutlined, UserOutlined, FileTextOutlined,
-  BookOutlined, FormOutlined, DeleteOutlined, PlusOutlined,
+  BookOutlined, FormOutlined, DeleteOutlined, PlusOutlined, FlagOutlined,
 } from '@ant-design/icons';
 import { useAppStore } from '../../store/useAppStore';
 import { shuffleArray } from '../../utils/mockAI';
 import { cleanOptionText, isSimilarQuestion } from '../../utils/questionCleaner';
+import { isCloudConfigured, fetchPracticeProgressCloud, overwritePracticeProgressCloud, deletePracticeProgressCloud } from '../../services/cloudService';
 import type { Question, QuestionType } from '../../types';
-
-const ADMIN_PASSWORD = 'admin123';
 
 // 老师规定：考生刷题只保留 单选 / 多选 / 判断 三种客观题
 const PRACTICE_TYPES: QuestionType[] = ['single', 'multiple', 'judge'];
@@ -46,13 +45,20 @@ const typeColorHex: Record<QuestionType, string> = {
 
 type View = 'home' | 'config' | 'answer' | 'result' | 'wrong';
 
+// 练习来源类型：standard=标准考试卷 free=自由刷题 wrong=错题练习
+type PracticeSource = 'standard' | 'free' | 'wrong';
+
 interface PracticeAnswer {
   questionId: string;
   userAnswer: string;
   correct: boolean;
   actual: string;
   unscored?: boolean; // 本题无标准答案（answer 为占位符），不参与判分
+  flagged?: boolean; // 用户标记本题（答题卡黄标，用于"不确定/回头再看"）
 }
+
+const sourceLabel = (s: PracticeSource) =>
+  s === 'standard' ? '标准考试卷' : s === 'wrong' ? '错题练习' : '自由刷题';
 
 const getOptionLetter = (idx: number) => String.fromCharCode(65 + idx);
 
@@ -116,12 +122,10 @@ type AnswerMode = 'immediate' | 'batch';
 
 export function Practice() {
   const {
-    questionBanks, currentUserName, setCurrentUser, setCurrentStep,
+    questionBanks, currentUserName, currentUserId, currentUser, setCurrentStep, setPracticeView,
     wrongQuestions, addWrongQuestion, removeWrongQuestion, bumpWrongStats,
+    practiceStats, recordPractice, logout,
   } = useAppStore();
-
-  const [adminOpen, setAdminOpen] = useState(false);
-  const [adminPassword, setAdminPassword] = useState('');
 
   // 页面视图
   const [view, setView] = useState<View>('home');
@@ -139,6 +143,11 @@ export function Practice() {
   const [mode, setMode] = useState<AnswerMode>('immediate');
   const [shuffleQ, setShuffleQ] = useState(true);
 
+  // 本次练习的答案展示方式（组卷时从配置快照，不随全局配置联动）
+  const [practiceMode, setPracticeMode] = useState<AnswerMode>('immediate');
+  // 本次练习来源（用于"继续上次答题"卡片展示卷型）
+  const [practiceSource, setPracticeSource] = useState<PracticeSource>('free');
+
   // 答题状态
   const [questions, setQuestions] = useState<Question[]>([]);
   const [index, setIndex] = useState(0);
@@ -151,14 +160,16 @@ export function Practice() {
   const [wrongBankFilter, setWrongBankFilter] = useState<string | undefined>();
   // 是否有未完成的练习进度（首页显示"继续上次答题"）
   const [hasSavedPractice, setHasSavedPractice] = useState(false);
+  // 上次未完成练习的概要信息（题库名/卷型/进度），用于首页信息卡片
+  const [savedInfo, setSavedInfo] = useState<{ sourceType: PracticeSource; bankName: string; done: number; total: number } | null>(null);
 
   const bank = useMemo(
     () => (bankId ? questionBanks.find((b) => b.id === bankId) : undefined),
     [bankId, questionBanks]
   );
 
-  // 当前用户标识
-  const userId = currentUserName || 'guest';
+  // 当前用户标识（云端 userId 优先）
+  const userId = currentUserId || currentUserName || 'guest';
 
   // 可选客观题（已审核通过，按 id + 内容双重去重，避免重复题目撞车）
   const available = useMemo(() => {
@@ -237,7 +248,7 @@ export function Practice() {
     for (const t of PRACTICE_TYPES) {
       picked.push(...pickQuestions(t, STANDARD_QUOTA[t] || 0, picked));
     }
-    beginPractice(picked);
+    beginPractice(picked, 'standard');
   };
 
   const startFreePractice = () => {
@@ -253,10 +264,10 @@ export function Practice() {
         picked.push(q);
       }
     }
-    beginPractice(picked);
+    beginPractice(picked, 'free');
   };
 
-  const beginPractice = (picked: Question[]) => {
+  const beginPractice = (picked: Question[], source: PracticeSource) => {
     if (picked.length === 0) { message.warning('没有可组卷的题目'); return; }
     clearSavedPractice();
     setQuestions(picked);
@@ -269,6 +280,9 @@ export function Practice() {
     setAnswers([]);
     setRevealed(false);
     setPracticeWrongIds([]);
+    // 快照本次练习的展示方式与来源（后续切换配置页不影响本次练习）
+    setPracticeMode(mode);
+    setPracticeSource(source);
     setView('answer');
   };
 
@@ -293,10 +307,15 @@ export function Practice() {
     setCurAnswer('');
     setAnswers([]);
     setRevealed(false);
+    // 错题练习也快照本次展示方式，并标记来源为错题练习
+    setPracticeMode(mode);
+    setPracticeSource('wrong');
     setView('answer');
   };
 
   const currentQuestion = questions[index];
+  // 当前题是否已被用户标记（用于"标记本题"按钮状态）
+  const curFlagged = currentQuestion ? answers.find((a) => a.questionId === currentQuestion.id)?.flagged : false;
 
   const checkCorrect = (q: Question, a: string): { correct: boolean; actual: string; unscored?: boolean } => {
     const actual = q.answer?.trim() || '';
@@ -327,34 +346,52 @@ export function Practice() {
   const saveAnswerForQuestion = (q: Question, answer: string, silent = false) => {
     if (!q || answer.trim() === '') return;
     const { correct, actual, unscored } = checkCorrect(q, answer);
-    let changed = false;
+    const prev = answers.find((x) => x.questionId === q.id);
+    const isNewAnswer = !prev || prev.userAnswer !== answer;
     const newAnswers = answers.map((x) => {
       if (x.questionId === q.id) {
-        changed = changed || x.userAnswer !== answer;
-        return { questionId: q.id, userAnswer: answer, correct, actual, unscored };
+        // 保留 x.flagged 等标记字段，只更新作答相关字段
+        return { ...x, questionId: q.id, userAnswer: answer, correct, actual, unscored };
       }
       return x;
     });
     if (!newAnswers.some((x) => x.questionId === q.id)) {
       newAnswers.push({ questionId: q.id, userAnswer: answer, correct, actual, unscored });
-      changed = true;
     }
     setAnswers(newAnswers);
 
+    // 判分统计：仅当题目产生新作答/变更时累计（切题自动保存不会重复计数）
+    if (isNewAnswer && !unscored) {
+      recordPractice(userId, questionBankIds[q.id] || '', q.id, correct);
+    }
+
     // 答错 → 自动收进错题本（用该题所属题库）；无标准答案的题不判错，不进错题本
-    if (!correct && !unscored) {
+    if (isNewAnswer && !correct && !unscored) {
       addWrongQuestion({ userId, bankId: questionBankIds[q.id] || '', questionId: q.id, source: 'auto' });
     }
 
     // 错题练习：更新该错题的答对/答错统计
     const wrongId = questionWrongMap[q.id];
-    if (wrongId) {
+    if (wrongId && isNewAnswer) {
       bumpWrongStats(wrongId, correct);
     }
 
     if (!silent) {
-      if (changed) message.success(correct ? '答对了！' : '已记录本题');
-      if (!correct && !unscored && changed) message.info('答错了，已自动加入错题本');
+      if (isNewAnswer) message.success(correct ? '答对了！' : '已记录本题');
+      if (!correct && !unscored && isNewAnswer) message.info('答错了，已自动加入错题本');
+    }
+  };
+
+  // 标记/取消标记本题（答题卡黄标，用于"不确定/回头再看"）
+  const toggleFlag = (q: Question) => {
+    if (!q) return;
+    const existing = answers.find((x) => x.questionId === q.id);
+    if (existing) {
+      setAnswers(answers.map((x) => (x.questionId === q.id ? { ...x, flagged: !x.flagged } : x)));
+      message.success(existing.flagged ? '已取消标记' : '已标记本题');
+    } else {
+      setAnswers([...answers, { questionId: q.id, userAnswer: '', correct: false, actual: '', flagged: true }]);
+      message.success('已标记本题');
     }
   };
 
@@ -363,7 +400,7 @@ export function Practice() {
     if (!q) return;
     if (curAnswer.trim() === '') { message.warning('请先作答本题'); return; }
     saveAnswerForQuestion(q, curAnswer, true);
-    if (mode === 'immediate') setRevealed(true);
+    if (practiceMode === 'immediate') setRevealed(true);
   };
 
   const manualAddWrong = (q: Question) => {
@@ -386,7 +423,7 @@ export function Practice() {
       const nextAns = answers.find((a) => a.questionId === nextQ.id);
       setIndex(nextIdx);
       setCurAnswer(nextAns?.userAnswer || '');
-      setRevealed(mode === 'immediate' ? !!nextAns : false);
+      setRevealed(practiceMode === 'immediate' ? !!nextAns : false);
     } else {
       // 完成全部题目，清除保存的练习进度
       clearSavedPractice();
@@ -402,7 +439,7 @@ export function Practice() {
       setIndex(index - 1);
       const prevAns = answers.find((a) => a.questionId === questions[index - 1].id);
       setCurAnswer(prevAns?.userAnswer || '');
-      setRevealed(mode === 'immediate' ? !!prevAns : false);
+      setRevealed(practiceMode === 'immediate' ? !!prevAns : false);
     }
   };
 
@@ -415,22 +452,31 @@ export function Practice() {
     const targetQ = questions[targetIdx];
     const targetAns = answers.find((a) => a.questionId === targetQ.id);
     setCurAnswer(targetAns?.userAnswer || '');
-    setRevealed(mode === 'immediate' ? !!targetAns : false);
+    setRevealed(practiceMode === 'immediate' ? !!targetAns : false);
     setAnswerSheetOpen(false);
   };
 
   // ---------- 练习进度持久化（下次可继续上次答题） ----------
   const SAVE_KEY = () => `qm_practice_${userId}`;
 
-  const loadSavedPractice = (): {
-    questions: Question[]; index: number; answers: PracticeAnswer[];
-    questionBankIds: Record<string, string>; questionWrongMap: Record<string, string>;
-    practiceWrongIds: string[]; mode: AnswerMode;
-  } | null => {
+  // 练习存档数据结构（practiceMode/sourceType 为新字段，mode 兼容旧版存档）
+  interface SavedPracticeData {
+    questions: Question[];
+    index: number;
+    answers: PracticeAnswer[];
+    questionBankIds: Record<string, string>;
+    questionWrongMap: Record<string, string>;
+    practiceWrongIds: string[];
+    practiceMode?: AnswerMode;
+    sourceType?: PracticeSource;
+    mode?: AnswerMode;
+  }
+
+  const loadSavedPractice = (): SavedPracticeData | null => {
     try {
       const raw = localStorage.getItem(SAVE_KEY());
       if (!raw) return null;
-      const data = JSON.parse(raw);
+      const data = JSON.parse(raw) as SavedPracticeData;
       if (!Array.isArray(data.questions) || data.questions.length === 0) return null;
       return data;
     } catch {
@@ -441,6 +487,47 @@ export function Practice() {
   const clearSavedPractice = () => {
     try { localStorage.removeItem(SAVE_KEY()); } catch { /* ignore */ }
     setHasSavedPractice(false);
+    setSavedInfo(null);
+    // 同步清理云端存档（完成/放弃练习时）
+    if (isCloudConfigured() && userId) {
+      deletePracticeProgressCloud(userId).catch(() => {});
+    }
+  };
+
+  // 推断练习来源（兼容旧版未保存 sourceType 的存档）
+  const inferSource = (saved: SavedPracticeData): PracticeSource => {
+    if (saved.sourceType) return saved.sourceType;
+    if (saved.practiceWrongIds?.length) return 'wrong';
+    if (saved.questions?.length === 60) return 'standard';
+    return 'free';
+  };
+
+  // 从存档生成首页"继续上次练习"卡片的概要信息
+  const buildSavedInfo = (saved: SavedPracticeData) => {
+    const sourceType = inferSource(saved);
+    const bankId = Object.values(saved.questionBankIds || {}).find((id) => id) as string | undefined;
+    const bankName = questionBanks.find((b) => b.id === bankId)?.name || '未命名题库';
+    const total = saved.questions.length;
+    const done = Math.min(saved.index + 1, total);
+    return { sourceType, bankName, done, total };
+  };
+
+  // 保存当前进度到 localStorage（供"继续上次答题"恢复），并异步同步云端
+  const persistPractice = () => {
+    try {
+      const data = {
+        questions, index, answers,
+        questionBankIds, questionWrongMap, practiceWrongIds,
+        mode: practiceMode, practiceMode, sourceType: practiceSource,
+      };
+      localStorage.setItem(SAVE_KEY(), JSON.stringify(data));
+      setHasSavedPractice(true);
+      setSavedInfo(buildSavedInfo(data));
+      // 本地保存后异步同步云端（换设备可继续做）
+      if (isCloudConfigured() && userId) {
+        overwritePracticeProgressCloud(userId, data as any).catch(() => {});
+      }
+    } catch { /* ignore */ }
   };
 
   // 保存当前进度，返回首页，下次可继续
@@ -448,13 +535,7 @@ export function Practice() {
     const q = currentQuestion;
     // 保存未提交的当前题
     if (q && curAnswer.trim() !== '') saveAnswerForQuestion(q, curAnswer, true);
-    try {
-      localStorage.setItem(SAVE_KEY(), JSON.stringify({
-        questions, index, answers,
-        questionBankIds, questionWrongMap, practiceWrongIds, mode,
-      }));
-      setHasSavedPractice(true);
-    } catch { /* ignore */ }
+    persistPractice();
     setView('home');
   };
 
@@ -467,24 +548,42 @@ export function Practice() {
     setQuestionWrongMap(saved.questionWrongMap);
     setPracticeWrongIds(saved.practiceWrongIds);
     setAnswers(saved.answers);
-    const restoredMode: AnswerMode = saved.mode || 'immediate';
+    const restoredMode: AnswerMode = saved.practiceMode || saved.mode || 'immediate';
     setMode(restoredMode);
+    setPracticeMode(restoredMode);
+    setPracticeSource(inferSource(saved));
     setIndex(Math.min(saved.index, saved.questions.length - 1));
     const restoredQ = saved.questions[Math.min(saved.index, saved.questions.length - 1)];
     const restoredAns = saved.answers.find((a) => a.questionId === restoredQ?.id);
     setCurAnswer(restoredAns?.userAnswer || '');
     setRevealed(restoredMode === 'immediate' ? !!restoredAns : false);
     setHasSavedPractice(true);
+    setSavedInfo(buildSavedInfo(saved));
     setView('answer');
   };
 
-  // 挂载时如有未完成的练习，自动恢复到退出时的题号和已答记录
+  // 挂载时如有未完成的练习，自动恢复到退出时的题号和已答记录；
+  // 本地无存档时尝试从云端恢复（换设备登录场景）
   useEffect(() => {
     const saved = loadSavedPractice();
     if (saved) {
       resumePractice();
-    } else {
-      setHasSavedPractice(false);
+      return;
+    }
+    setHasSavedPractice(false);
+    setSavedInfo(null);
+    if (isCloudConfigured() && userId) {
+      fetchPracticeProgressCloud(userId)
+        .then((cloud) => {
+          if (!cloud) return;
+          localStorage.setItem(SAVE_KEY(), JSON.stringify(cloud));
+          const restored = loadSavedPractice();
+          if (restored) {
+            setHasSavedPractice(true);
+            setSavedInfo(buildSavedInfo(restored));
+          }
+        })
+        .catch(() => { /* 云端恢复失败不阻塞 */ });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]); // 仅登录/挂载时检测一次
@@ -498,9 +597,21 @@ export function Practice() {
     setQuestionWrongMap({});
   };
 
-  const answeredCount = answers.length;
+  const answeredCount = answers.filter((a) => (a.userAnswer || '').trim() !== '').length;
   const correctCount = answers.filter((a) => a.correct).length;
+  const flaggedCount = answers.filter((a) => a.flagged).length;
   const score = answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : 0;
+
+  // 首页"我的进度"：当前题库已练题数（去重）+ 累计正确率
+  const myStats = practiceStats[userId];
+  const practicedInBank = useMemo(() => {
+    if (!myStats || !bankId) return 0;
+    const prefix = `${bankId}:`;
+    return myStats.practicedIds.filter((id) => id.startsWith(prefix)).length;
+  }, [myStats, bankId]);
+  const myAccuracy = myStats && myStats.answeredCount > 0
+    ? Math.round((myStats.correctCount / myStats.answeredCount) * 100)
+    : 0;
 
   // ================== 渲染 ==================
   return (
@@ -517,13 +628,16 @@ export function Practice() {
               <span className="flex items-center gap-1 text-white/90 text-sm">
                 <UserOutlined /> {currentUserName || '考生'}
               </span>
-              <button
-                onClick={() => setAdminOpen(true)}
-                className="text-white/60 hover:text-white text-xs flex items-center gap-1 transition-colors"
-                title="管理后台"
-              >
-                <SettingOutlined /> 后台
-              </button>
+              {/* 管理员（zhangjie）双入口：答题端随时可切回管理后台 */}
+              {currentUser === 'admin' && (
+                <button
+                  onClick={() => { setPracticeView(false); setCurrentStep('import'); }}
+                  className="text-white/60 hover:text-white text-xs flex items-center gap-1 transition-colors"
+                  title="返回管理后台"
+                >
+                  <SettingOutlined /> 后台
+                </button>
+              )}
               <Button
                 type="text"
                 size="small"
@@ -535,14 +649,9 @@ export function Practice() {
                     if (currentQuestion && curAnswer.trim() !== '') {
                       saveAnswerForQuestion(currentQuestion, curAnswer, true);
                     }
-                    try {
-                      localStorage.setItem(SAVE_KEY(), JSON.stringify({
-                        questions, index, answers,
-                        questionBankIds, questionWrongMap, practiceWrongIds, mode,
-                      }));
-                    } catch { /* ignore */ }
+                    persistPractice();
                   }
-                  setCurrentUser('guest', '');
+                  logout();
                 }}
               >
                 退出登录
@@ -551,49 +660,6 @@ export function Practice() {
           </div>
         </div>
       </div>
-
-      {/* 管理员入口弹窗 */}
-      <Modal
-        title="管理员登录"
-        open={adminOpen}
-        onCancel={() => { setAdminOpen(false); setAdminPassword(''); }}
-        footer={null}
-        width={360}
-      >
-        <div className="space-y-4 pt-2">
-          <Input.Password
-            placeholder="请输入管理员密码"
-            value={adminPassword}
-            onChange={(e) => setAdminPassword(e.target.value)}
-            onPressEnter={() => {
-              if (adminPassword === ADMIN_PASSWORD) {
-                setAdminOpen(false);
-                setAdminPassword('');
-                setCurrentUser('admin', '管理员');
-                setCurrentStep('import');
-              } else {
-                message.error('管理员密码错误');
-              }
-            }}
-          />
-          <Button
-            type="primary"
-            block
-            onClick={() => {
-              if (adminPassword === ADMIN_PASSWORD) {
-                setAdminOpen(false);
-                setAdminPassword('');
-                setCurrentUser('admin', '管理员');
-                setCurrentStep('import');
-              } else {
-                message.error('管理员密码错误');
-              }
-            }}
-          >
-            进入管理后台
-          </Button>
-        </div>
-      </Modal>
 
       <div className="max-w-[980px] mx-auto px-3 sm:px-4 py-4 sm:py-6">
 
@@ -615,12 +681,27 @@ export function Practice() {
                 options={questionBanks.map((b) => ({ value: b.id, label: b.name }))}
               />
               {bank && (
-                <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
-                  {PRACTICE_TYPES.map((t) => (
-                    <Tag key={t} color={typeColor[t]}>{typeShort[t]} {availableCounts.get(t) || 0}题</Tag>
-                  ))}
-                  <Tag>共 {available.length} 题可刷</Tag>
-                </div>
+                <>
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+                    {PRACTICE_TYPES.map((t) => (
+                      <Tag key={t} color={typeColor[t]}>{typeShort[t]} {availableCounts.get(t) || 0}题</Tag>
+                    ))}
+                    <Tag>共 {available.length} 题可刷</Tag>
+                  </div>
+
+                  {/* 题库规模 + 我的进度 */}
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <div className="rounded-xl bg-[#f6f8fb] border border-gray-100 p-3">
+                      <div className="text-[11px] text-gray-400">题库规模</div>
+                      <div className="text-xl font-bold text-gray-800 mt-0.5">{bank.questions.length} <span className="text-xs font-normal text-gray-400">题</span></div>
+                    </div>
+                    <div className="rounded-xl bg-[#f6f8fb] border border-gray-100 p-3">
+                      <div className="text-[11px] text-gray-400">我的进度</div>
+                      <div className="text-xl font-bold text-[#1e6fb5] mt-0.5">已练 {practicedInBank} <span className="text-xs font-normal text-gray-400">题</span></div>
+                      <div className="text-[11px] text-gray-500 mt-0.5">正确率 {myAccuracy}%</div>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
 
@@ -681,19 +762,38 @@ export function Practice() {
               </button>
             </div>
 
-            {/* 继续上次未完成的答题 */}
-            {hasSavedPractice && (
-              <div className="mt-4">
-                <Button
-                  block
-                  size="large"
-                  icon={<PlayCircleOutlined />}
-                  className="!border-[#1e6fb5] !text-[#1e6fb5] hover:!bg-blue-50"
-                  onClick={resumePractice}
-                >
-                  继续上次答题
-                </Button>
-                <div className="text-center text-[11px] text-gray-400 mt-1">若上次答题中途退出，可从这里接着刷</div>
+            {/* 继续上次未完成的答题（信息卡片：题库/卷型/进度） */}
+            {hasSavedPractice && savedInfo && (
+              <div className="mt-4 bg-white rounded-2xl shadow-sm border border-[#1e6fb5]/40 overflow-hidden">
+                <div className="flex items-center justify-between flex-wrap gap-2 px-4 sm:px-5 pt-4">
+                  <div className="flex items-center gap-2">
+                    <PlayCircleOutlined className="text-[#1e6fb5]" />
+                    <span className="font-bold text-gray-800">继续上次练习</span>
+                  </div>
+                  <span className="text-xs text-gray-500">
+                    {savedInfo.bankName} · {sourceLabel(savedInfo.sourceType)}
+                  </span>
+                </div>
+                <div className="px-4 sm:px-5 pt-3 flex items-center gap-3">
+                  <Progress
+                    percent={Math.round((savedInfo.done / savedInfo.total) * 100)}
+                    showInfo={false}
+                    strokeColor="#1e6fb5"
+                    style={{ flex: 1 }}
+                  />
+                  <span className="text-xs text-gray-500 whitespace-nowrap">已完成 {savedInfo.done} / {savedInfo.total} 题</span>
+                </div>
+                <div className="px-4 sm:px-5 pt-3 pb-4">
+                  <Button
+                    block
+                    size="large"
+                    icon={<PlayCircleOutlined />}
+                    className="!bg-[#1e6fb5]"
+                    onClick={resumePractice}
+                  >
+                    继续答题
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -863,13 +963,13 @@ export function Practice() {
             </div>
 
             {/* 即时模式反馈 */}
-            {mode === 'immediate' && !revealed && (
+            {practiceMode === 'immediate' && !revealed && (
               <div className="mt-6">
                 <Button type="primary" size="large" icon={<CheckCircleOutlined />} className="!bg-[#1e6fb5]" onClick={submitCurrent}>提交本题</Button>
               </div>
             )}
 
-            {mode === 'immediate' && revealed && (() => {
+            {practiceMode === 'immediate' && revealed && (() => {
               const curAns = answers.find((a) => a.questionId === currentQuestion.id);
               return (
               <div className="mt-6">
@@ -912,10 +1012,15 @@ export function Practice() {
               );
             })()}
 
-            {/* 批量模式 */}
-            {mode === 'batch' && (
+            {/* 批量模式：不显示对错，选完答案直接下一题（自动保存+判分+错题处理），完成统一看结果 */}
+            {practiceMode === 'batch' && (
               <div className="mt-6">
-                <Button type="primary" size="large" icon={<CheckCircleOutlined />} className="!bg-[#1e6fb5]" onClick={submitCurrent}>记录本题</Button>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="本模式不会显示对错和正确答案"
+                  description="完成全部题目后统一查看结果。选完答案直接点「下一题」，系统会自动保存并判分，答错的题会自动加入错题本。"
+                />
               </div>
             )}
 
@@ -923,7 +1028,16 @@ export function Practice() {
 
             {/* 底部导航 */}
             <div className="flex items-center justify-between gap-2 mt-2 flex-wrap">
-              <Button icon={<ArrowLeftOutlined />} onClick={prevQuestion} disabled={index === 0}>上一题</Button>
+              <div className="flex items-center gap-2">
+                <Button icon={<ArrowLeftOutlined />} onClick={prevQuestion} disabled={index === 0}>上一题</Button>
+                <Button
+                  icon={<FlagOutlined />}
+                  onClick={() => toggleFlag(currentQuestion)}
+                  className={curFlagged ? '!border-amber-400 !text-amber-500' : ''}
+                >
+                  {curFlagged ? '已标记' : '标记本题'}
+                </Button>
+              </div>
               <div className="flex items-center gap-2 flex-wrap justify-end">
                 {index < questions.length - 1 && (
                   <Button onClick={() => setView('result')}>交卷看结果</Button>
@@ -947,7 +1061,9 @@ export function Practice() {
         >
           <div className="grid grid-cols-5 sm:grid-cols-8 gap-2 sm:gap-3">
             {questions.map((q, i) => {
-              const answered = answers.some((a) => a.questionId === q.id);
+              const entry = answers.find((a) => a.questionId === q.id);
+              const answered = !!(entry?.userAnswer || '').trim();
+              const flagged = !!entry?.flagged;
               const isCurrent = i === index;
               return (
                 <button
@@ -961,15 +1077,22 @@ export function Practice() {
                 >
                   <div className="leading-tight">{i + 1}</div>
                   <div className="text-[10px] leading-tight mt-0.5 opacity-80">{typeShort[q.type]}</div>
+                  {flagged && <div className="text-[10px] leading-tight mt-0.5">🟡</div>}
                   {answered && <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-500 rounded-full" />}
                 </button>
               );
             })}
           </div>
-          <div className="mt-4 flex items-center justify-center gap-4 text-xs text-gray-500">
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-gray-500">
+            <span className="font-medium text-gray-700">已答 {answeredCount} / {questions.length}</span>
+            <span className="text-gray-400">未答 {questions.length - answeredCount}</span>
+            <span className="text-amber-500">标记 {flaggedCount}</span>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-4 text-xs text-gray-500">
             <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-green-500" />已做</span>
             <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-[#1e6fb5]" />当前</span>
             <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-gray-300" />未做</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-amber-400" />已标记</span>
           </div>
         </Modal>
 

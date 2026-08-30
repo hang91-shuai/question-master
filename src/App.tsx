@@ -33,6 +33,7 @@ const moduleMap = {
 function AppContent() {
   const currentStep = useAppStore((s) => s.currentStep);
   const currentUser = useAppStore((s) => s.currentUser);
+  const practiceView = useAppStore((s) => s.practiceView);
   const logout = useAppStore((s) => s.logout);
 
   // 未登录 -> 登录门面
@@ -41,7 +42,8 @@ function AppContent() {
   }
 
   // 考生 -> 纯净刷题端（看不到任何命题功能）
-  if (currentUser === 'student') {
+  // 管理员 -> 若处于答题端视图，同样渲染刷题端（zhangjie 双入口）
+  if (currentUser === 'student' || (currentUser === 'admin' && practiceView)) {
     return <Practice />;
   }
 

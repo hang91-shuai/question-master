@@ -23,3 +23,7 @@ cloudbaserc.json
 *.njsproj
 *.sln
 *.sw?
+
+# 账号敏感数据（含密码哈希/明文，不入库）
+scripts/accounts_data.json
+考生账号发放表.xlsx

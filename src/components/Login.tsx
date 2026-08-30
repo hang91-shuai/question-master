@@ -1,19 +1,16 @@
 import { useState } from 'react';
 import { useEffect } from 'react';
-import { Input, Button, message, Tabs, Alert } from 'antd';
-import { UserOutlined, LockOutlined, ArrowRightOutlined, SettingOutlined, IdcardOutlined, TeamOutlined } from '@ant-design/icons';
+import { Input, Button, message, Alert } from 'antd';
+import { UserOutlined, LockOutlined, ArrowRightOutlined } from '@ant-design/icons';
 import { GraduationCap, BookOpen, Target, TrendingUp } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
-import { fetchBanksFromCloud, isCloudConfigured } from '../services/cloudService';
-import type { UserRole } from '../types';
-
-const DEFAULT_STUDENT = { username: 'student', password: '123456', name: '考生' };
-const DEFAULT_ADMIN = { username: 'admin', password: 'admin123', name: '管理员' };
+import { fetchBanksFromCloud, isCloudConfigured, loginCloud, fetchWrongQuestionsCloud, fetchPracticeStatsCloud } from '../services/cloudService';
 
 export function Login() {
-  const { setCurrentUser, userAccounts, registerAccount, mergeQuestionBanks } = useAppStore();
-  const [adminMode, setAdminMode] = useState(false);
-  const [tab, setTab] = useState<'login' | 'register'>('login');
+  const { setCurrentUser, setPracticeView, hydrateCloudUserData, mergeQuestionBanks } = useAppStore();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
   // 登录成功后异步加载云端题库，供考生刷题
   const loadCloudBanks = async () => {
@@ -26,64 +23,46 @@ export function Login() {
     }
   };
 
-  // 页面打开即自动拉取一次云端题库，保证游客/考生都能拿到最新题库（本地缓存若过期会被云端覆盖）
+  // 页面打开即自动拉取一次云端题库，保证登录后能立即拿到最新题库
   useEffect(() => {
     loadCloudBanks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-
-  const doLogin = (role: UserRole) => {
-    const u = username.trim();
-    const p = password.trim();
-    if (!u || !p) { message.warning('请输入账号和密码'); return; }
-
-    if (role === 'admin') {
-      if (u === DEFAULT_ADMIN.username && p === DEFAULT_ADMIN.password) {
-        setCurrentUser('admin', DEFAULT_ADMIN.name);
-        loadCloudBanks();
-      } else {
-        const acc = userAccounts.find((a) => a.role === 'admin' && a.username === u && a.password === p);
-        if (acc) { setCurrentUser('admin', acc.name); loadCloudBanks(); }
-        else message.error('管理员账号或密码错误');
-      }
-      return;
-    }
-
-    // 考生登录
-    if (u === DEFAULT_STUDENT.username && p === DEFAULT_STUDENT.password) {
-      setCurrentUser('student', DEFAULT_STUDENT.name);
-      loadCloudBanks();
-      return;
-    }
-    const acc = userAccounts.find((a) => a.role === 'student' && a.username === u && a.password === p);
-    if (acc) {
-      setCurrentUser('student', acc.name);
-      loadCloudBanks();
-    } else {
-      message.error('账号或密码错误');
+  // 登录成功后从云端恢复该考生的错题本/练习统计（云端为主）
+  const hydrateCloudData = async (userId: string) => {
+    try {
+      const [wrong, stats] = await Promise.all([
+        fetchWrongQuestionsCloud(userId),
+        fetchPracticeStatsCloud(userId),
+      ]);
+      hydrateCloudUserData(userId, wrong, stats);
+    } catch {
+      // 云端数据恢复失败不阻塞登录
     }
   };
 
-  const doRegister = () => {
+  const doLogin = async () => {
     const u = username.trim();
     const p = password.trim();
-    const n = name.trim();
-    if (!u || !p || !n) { message.warning('请完整填写姓名、账号、密码'); return; }
-    if (p.length < 6) { message.warning('密码至少 6 位'); return; }
-    if (u === DEFAULT_STUDENT.username || u === DEFAULT_ADMIN.username) {
-      message.error('该账号已被系统占用'); return;
-    }
-    const ok = registerAccount({ username: u, password: p, name: n, role: 'student' });
-    if (ok) {
-      message.success('注册成功，请登录');
-      setTab('login');
-      setPassword('');
-    } else {
-      message.error('该账号已存在，请更换');
+    if (!u || !p) { message.warning('请输入账号和密码'); return; }
+    if (!isCloudConfigured()) { message.error('云端未配置，暂无法登录'); return; }
+    setLoading(true);
+    try {
+      const user = await loginCloud(u, p);
+      if (!user) {
+        message.error('账号或密码错误');
+        return;
+      }
+      setCurrentUser(user.role, user.name, user.id);
+      setPracticeView(false); // 管理员默认进后台，答题端需手动切换
+      loadCloudBanks();
+      hydrateCloudData(user.id);
+      message.success(`欢迎，${user.name}`);
+    } catch {
+      message.error('登录失败，请稍后重试');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -158,141 +137,47 @@ export function Login() {
 
       {/* 右侧表单区 */}
       <div className="w-full lg:w-[45%] xl:w-[42%] min-h-screen bg-[#faf9f7] flex flex-col justify-center p-6 sm:p-10 lg:p-16 relative">
-        {/* 右上角管理员入口 */}
-        <button
-          onClick={() => { setAdminMode(!adminMode); setTab('login'); setPassword(''); }}
-          className="absolute top-5 right-6 text-gray-400 hover:text-gray-700 text-xs flex items-center gap-1 transition-colors"
-        >
-          <SettingOutlined /> {adminMode ? '返回考生登录' : '管理后台'}
-        </button>
-
         <div className="max-w-md w-full mx-auto">
-          {/* 表单头部：桌面显示，移动端隐藏（品牌头已包含标题） */}
-          <div className="mb-8 hidden lg:block">
-            <h2 className="text-3xl font-bold text-[#0b1120] mb-2">
-              {adminMode ? '管理员登录' : '欢迎回来'}
-            </h2>
-            <p className="text-gray-500">
-              {adminMode ? '进入命题与题库管理后台' : '登录后继续你的备考进度'}
-            </p>
+          {/* 表单头部 */}
+          <div className="mb-8">
+            <h2 className="text-3xl font-bold text-[#0b1120] mb-2">欢迎回来</h2>
+            <p className="text-gray-500">登录后继续你的备考进度</p>
           </div>
 
-          {adminMode ? (
-            <div className="space-y-5">
-              <Input
-                size="large"
-                placeholder="管理员账号"
-                prefix={<UserOutlined className="text-gray-400" />}
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="login-input"
-              />
-              <Input.Password
-                size="large"
-                placeholder="管理员密码"
-                prefix={<LockOutlined className="text-gray-400" />}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onPressEnter={() => doLogin('admin')}
-                className="login-input"
-              />
-              <Button
-                type="primary"
-                size="large"
-                block
-                onClick={() => doLogin('admin')}
-                className="login-btn-primary"
-              >
-                进入管理后台
-              </Button>
-              <Alert type="info" showIcon message="默认管理员：admin / admin123" className="rounded-xl" />
-            </div>
-          ) : (
-            <Tabs
-              activeKey={tab}
-              onChange={(k) => { setTab(k as 'login' | 'register'); setPassword(''); }}
-              className="login-tabs"
-              items={[
-                {
-                  key: 'login',
-                  label: <span className="flex items-center gap-1.5"><TeamOutlined /> 登录</span>,
-                  children: (
-                    <div className="space-y-5 pt-2">
-                      <Input
-                        size="large"
-                        placeholder="账号"
-                        prefix={<UserOutlined className="text-gray-400" />}
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        className="login-input"
-                      />
-                      <Input.Password
-                        size="large"
-                        placeholder="密码"
-                        prefix={<LockOutlined className="text-gray-400" />}
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        onPressEnter={() => doLogin('student')}
-                        className="login-input"
-                      />
-                      <Button
-                        type="primary"
-                        size="large"
-                        block
-                        icon={<ArrowRightOutlined />}
-                        onClick={() => doLogin('student')}
-                        className="login-btn-primary"
-                      >
-                        进入刷题
-                      </Button>
-                      <Alert type="info" showIcon message="体验账号：student / 123456" className="rounded-xl" />
-                    </div>
-                  ),
-                },
-                {
-                  key: 'register',
-                  label: <span className="flex items-center gap-1.5"><IdcardOutlined /> 注册</span>,
-                  children: (
-                    <div className="space-y-5 pt-2">
-                      <Input
-                        size="large"
-                        placeholder="姓名"
-                        prefix={<IdcardOutlined className="text-gray-400" />}
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        className="login-input"
-                      />
-                      <Input
-                        size="large"
-                        placeholder="设置账号"
-                        prefix={<UserOutlined className="text-gray-400" />}
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        className="login-input"
-                      />
-                      <Input.Password
-                        size="large"
-                        placeholder="设置密码（至少6位）"
-                        prefix={<LockOutlined className="text-gray-400" />}
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        onPressEnter={doRegister}
-                        className="login-input"
-                      />
-                      <Button
-                        size="large"
-                        block
-                        onClick={doRegister}
-                        className="login-btn-secondary"
-                      >
-                        注册账号
-                      </Button>
-                    </div>
-                  ),
-                },
-              ]}
+          <div className="space-y-5">
+            <Input
+              size="large"
+              placeholder="账号"
+              prefix={<UserOutlined className="text-gray-400" />}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
             />
-          )}
+            <Input.Password
+              size="large"
+              placeholder="密码"
+              prefix={<LockOutlined className="text-gray-400" />}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onPressEnter={doLogin}
+            />
+            <Button
+              type="primary"
+              size="large"
+              block
+              loading={loading}
+              icon={<ArrowRightOutlined />}
+              onClick={doLogin}
+              className="login-btn-primary"
+            >
+              登录
+            </Button>
+            <Alert
+              type="info"
+              showIcon
+              message="账号由管理员统一发放，如忘记密码请联系管理员。"
+              className="rounded-xl"
+            />
+          </div>
         </div>
       </div>
     </div>

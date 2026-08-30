@@ -1,6 +1,10 @@
-import { FileText, Database, Zap } from 'lucide-react';
+import { FileText, Database, Zap, Edit3 } from 'lucide-react';
+import { useAppStore } from '../store/useAppStore';
 
 export function Header() {
+  const currentUserName = useAppStore((s) => s.currentUserName);
+  const setPracticeView = useAppStore((s) => s.setPracticeView);
+
   return (
     <header className="bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 text-white px-4 sm:px-6 py-4 sm:py-5 shadow-md">
       <div className="max-w-[1440px] mx-auto flex items-center gap-3 sm:gap-4">
@@ -19,9 +23,20 @@ export function Header() {
             </span>
           </p>
         </div>
-        <div className="hidden md:flex items-center gap-2 bg-white/15 px-4 py-2 rounded-full text-sm shrink-0">
-          <Database className="w-4 h-4" />
-          <span>本地优先 · 离线可用</span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="hidden md:inline text-sm text-white/90">{currentUserName}</span>
+          <button
+            onClick={() => setPracticeView(true)}
+            className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm transition-colors"
+            title="以考生身份进入答题端"
+          >
+            <Edit3 className="w-4 h-4" />
+            <span className="hidden sm:inline">进入答题端</span>
+          </button>
+          <div className="hidden md:flex items-center gap-2 bg-white/15 px-4 py-2 rounded-full text-sm">
+            <Database className="w-4 h-4" />
+            <span>云端同步</span>
+          </div>
         </div>
       </div>
     </header>

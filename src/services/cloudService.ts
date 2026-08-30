@@ -1,4 +1,4 @@
-import type { Question, QuestionBank } from '../types';
+import type { Question, QuestionBank, WrongQuestion } from '../types';
 
 // 云函数代理地址（HTTP 网关 /api 路径）
 // 云函数在服务端转发对 PostgREST 数据库 API 的请求，从而绕开浏览器 CORS。
@@ -179,6 +179,180 @@ export function dedupeBanksByContent(banks: QuestionBank[]): QuestionBank[] {
  *   2. 再按 id 逐条拉取完整数据（含题目），每条一个请求
  * 这样每条响应都远小于网关限制，保证拉取稳定。
  */
+// ==================================================================
+// 考生账号 & 考生数据云端同步
+// 云端为主，本地缓存为辅：账号/错题本/练习进度/练习统计全部按 userId 存云端
+// ==================================================================
+
+export interface CloudUser {
+  id: string;
+  username: string;
+  name: string;
+  role: 'student' | 'admin';
+}
+
+export interface CloudProgressData {
+  questions: unknown[];
+  index: number;
+  answers: unknown[];
+  questionBankIds: Record<string, string>;
+  questionWrongMap: Record<string, string>;
+  practiceWrongIds: string[];
+  practiceMode?: string;
+  sourceType?: string;
+  mode?: string;
+}
+
+export interface CloudStatsData {
+  answeredCount: number;
+  correctCount: number;
+  practicedIds: string[];
+}
+
+// 密码哈希：SHA-256(`${username}:${password}`)，与入库脚本算法一致
+export async function sha256Hex(text: string): Promise<string> {
+  const data = new TextEncoder().encode(text);
+  const buf = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** 云端验证账号密码（哈希比对），返回用户信息或 null */
+export async function loginCloud(username: string, password: string): Promise<CloudUser | null> {
+  if (!isCloudConfigured()) return null;
+  const hash = await sha256Hex(`${username}:${password}`);
+  const rows = await proxyRequest({
+    path: '/student_accounts',
+    method: 'GET',
+    query: `select=id,username,name,role,status&username=eq.${encodeURIComponent(username)}&password_hash=eq.${hash}`,
+  });
+  const list = Array.isArray(rows) ? rows : [];
+  if (list.length === 0) return null;
+  const r = list[0];
+  if (r.status !== 'active') return null;
+  return {
+    id: r.id,
+    username: r.username,
+    name: r.name || r.username,
+    role: r.role === 'admin' ? 'admin' : 'student',
+  };
+}
+
+/** 拉取某考生的错题本（云端 -> 本地） */
+export async function fetchWrongQuestionsCloud(userId: string): Promise<WrongQuestion[]> {
+  if (!isCloudConfigured()) return [];
+  const rows = await proxyRequest({
+    path: '/wrong_questions',
+    method: 'GET',
+    query: `select=*&user_id=eq.${encodeURIComponent(userId)}`,
+  });
+  const list = Array.isArray(rows) ? rows : [];
+  return list.map((r: any) => ({
+    id: r.id,
+    userId: r.user_id,
+    bankId: r.bank_id,
+    questionId: r.question_id,
+    addedAt: r.added_at,
+    source: r.source,
+    correctCount: r.correct_count ?? 0,
+    wrongCount: r.wrong_count ?? 0,
+  }));
+}
+
+/** 覆盖式上传某考生的错题本（本地 -> 云端） */
+export async function overwriteWrongQuestionsCloud(userId: string, list: WrongQuestion[]): Promise<void> {
+  if (!isCloudConfigured()) return;
+  await proxyRequest({
+    path: '/wrong_questions',
+    method: 'DELETE',
+    query: `user_id=eq.${encodeURIComponent(userId)}`,
+  });
+  if (list.length === 0) return;
+  const rows = list.map((w) => ({
+    id: w.id,
+    user_id: w.userId,
+    bank_id: w.bankId,
+    question_id: w.questionId,
+    added_at: w.addedAt,
+    source: w.source,
+    correct_count: w.correctCount ?? 0,
+    wrong_count: w.wrongCount ?? 0,
+  }));
+  await runInBatches(rows, 5, (row) =>
+    proxyRequest({ path: '/wrong_questions', method: 'POST', body: row, prefer: 'return=minimal' })
+  );
+}
+
+/** 拉取某考生的未完成练习进度（云端 -> 本地） */
+export async function fetchPracticeProgressCloud(userId: string): Promise<CloudProgressData | null> {
+  if (!isCloudConfigured()) return null;
+  const rows = await proxyRequest({
+    path: '/practice_progress',
+    method: 'GET',
+    query: `select=data&user_id=eq.${encodeURIComponent(userId)}`,
+  });
+  const list = Array.isArray(rows) ? rows : [];
+  if (list.length === 0) return null;
+  return list[0].data ?? null;
+}
+
+/** 覆盖式保存某考生的练习进度（本地 -> 云端） */
+export async function overwritePracticeProgressCloud(userId: string, data: CloudProgressData): Promise<void> {
+  if (!isCloudConfigured()) return;
+  await proxyRequest({
+    path: '/practice_progress',
+    method: 'DELETE',
+    query: `user_id=eq.${encodeURIComponent(userId)}`,
+  });
+  await proxyRequest({
+    path: '/practice_progress',
+    method: 'POST',
+    body: { user_id: userId, data, updated_at: new Date().toISOString() },
+    prefer: 'return=minimal',
+  });
+}
+
+/** 删除某考生的练习进度（完成/放弃练习时清理云端存档） */
+export async function deletePracticeProgressCloud(userId: string): Promise<void> {
+  if (!isCloudConfigured()) return;
+  await proxyRequest({
+    path: '/practice_progress',
+    method: 'DELETE',
+    query: `user_id=eq.${encodeURIComponent(userId)}`,
+  });
+}
+
+/** 拉取某考生的练习统计（云端 -> 本地） */
+export async function fetchPracticeStatsCloud(userId: string): Promise<CloudStatsData | null> {
+  if (!isCloudConfigured()) return null;
+  const rows = await proxyRequest({
+    path: '/practice_stats',
+    method: 'GET',
+    query: `select=data&user_id=eq.${encodeURIComponent(userId)}`,
+  });
+  const list = Array.isArray(rows) ? rows : [];
+  if (list.length === 0) return null;
+  return list[0].data ?? null;
+}
+
+/** 覆盖式保存某考生的练习统计（本地 -> 云端） */
+export async function overwritePracticeStatsCloud(userId: string, stats: CloudStatsData): Promise<void> {
+  if (!isCloudConfigured()) return;
+  await proxyRequest({
+    path: '/practice_stats',
+    method: 'DELETE',
+    query: `user_id=eq.${encodeURIComponent(userId)}`,
+  });
+  await proxyRequest({
+    path: '/practice_stats',
+    method: 'POST',
+    body: { user_id: userId, data: stats, updated_at: new Date().toISOString() },
+    prefer: 'return=minimal',
+  });
+}
+
+// ==================================================================
+// 题库拉取（保留）
+// ==================================================================
 export async function fetchBanksFromCloud(): Promise<QuestionBank[]> {
   // 阶段一：拉取轻量元数据列表
   const meta = await proxyRequest({

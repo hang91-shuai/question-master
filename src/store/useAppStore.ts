@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { AppState, FileItem, OutlineItem, QuestionBank, ExamPlanItem, Question, StepKey, PersonalProfile, UserRole, UserAccount, WrongQuestion } from '../types';
+import type { AppState, FileItem, OutlineItem, QuestionBank, ExamPlanItem, Question, StepKey, PersonalProfile, UserRole, WrongQuestion } from '../types';
 import { cleanQuestion, cleanQuestionBank, cleanQuestionBanks } from '../utils/questionCleaner';
+import { isCloudConfigured, overwriteWrongQuestionsCloud, overwritePracticeStatsCloud } from '../services/cloudService';
 
 const defaultProfile: PersonalProfile = {
   name: '管理员',
@@ -12,11 +13,12 @@ const defaultProfile: PersonalProfile = {
 
 export const useAppStore = create<AppState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       currentStep: 'import',
       currentUser: 'guest',
       currentUserName: '',
-      userAccounts: [],
+      currentUserId: '',
+      practiceView: false,
       standardFiles: [],
       materialFiles: [],
       outlineItems: [],
@@ -27,36 +29,17 @@ export const useAppStore = create<AppState>()(
       selectedBankId: null,
       profile: defaultProfile,
       wrongQuestions: [],
+      practiceStats: {},
 
       setCurrentStep: (step: StepKey) => set({ currentStep: step }),
 
-      setCurrentUser: (role: UserRole, name: string) =>
-        set({ currentUser: role, currentUserName: name }),
+      setCurrentUser: (role: UserRole, name: string, userId?: string) =>
+        set({ currentUser: role, currentUserName: name, currentUserId: userId ?? '' }),
 
-      registerAccount: (account) => {
-        let ok = true;
-        set((state) => {
-          const exists = state.userAccounts.some(
-            (u) => u.username.toLowerCase() === account.username.toLowerCase()
-          );
-          if (exists) {
-            ok = false;
-            return state;
-          }
-          const newAccount: UserAccount = {
-            id: `acc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            username: account.username,
-            password: account.password,
-            name: account.name,
-            role: account.role,
-            createdAt: new Date().toLocaleString(),
-          };
-          return { userAccounts: [...state.userAccounts, newAccount] };
-        });
-        return ok;
-      },
+      setPracticeView: (v: boolean) => set({ practiceView: v }),
 
-      logout: () => set({ currentUser: 'guest', currentUserName: '' }),
+      logout: () =>
+        set({ currentUser: 'guest', currentUserName: '', currentUserId: '', practiceView: false }),
 
       addStandardFile: (file: FileItem) =>
         set((state) => ({ standardFiles: [...state.standardFiles, file] })),
@@ -181,7 +164,7 @@ export const useAppStore = create<AppState>()(
       updateProfile: (profile: Partial<PersonalProfile>) =>
         set((state) => ({ profile: { ...state.profile, ...profile } })),
 
-      addWrongQuestion: (entry) =>
+      addWrongQuestion: (entry) => {
         set((state) => {
           const exists = state.wrongQuestions.some(
             (w) => w.userId === entry.userId && w.bankId === entry.bankId && w.questionId === entry.questionId
@@ -198,12 +181,27 @@ export const useAppStore = create<AppState>()(
             wrongCount: 0,
           };
           return { wrongQuestions: [...state.wrongQuestions, newEntry] };
-        }),
+        });
+        // 本地写入后异步覆盖式同步云端（失败不阻塞）
+        const uid = entry.userId;
+        if (isCloudConfigured() && uid) {
+          const list = get().wrongQuestions.filter((w) => w.userId === uid);
+          overwriteWrongQuestionsCloud(uid, list).catch(() => {});
+        }
+      },
 
-      removeWrongQuestion: (id) =>
-        set((state) => ({ wrongQuestions: state.wrongQuestions.filter((w) => w.id !== id) })),
+      removeWrongQuestion: (id) => {
+        const target = get().wrongQuestions.find((w) => w.id === id);
+        set((state) => ({ wrongQuestions: state.wrongQuestions.filter((w) => w.id !== id) }));
+        const uid = target?.userId;
+        if (isCloudConfigured() && uid) {
+          const list = get().wrongQuestions.filter((w) => w.userId === uid);
+          overwriteWrongQuestionsCloud(uid, list).catch(() => {});
+        }
+      },
 
-      bumpWrongStats: (id, correct) =>
+      bumpWrongStats: (id, correct) => {
+        const target = get().wrongQuestions.find((w) => w.id === id);
         set((state) => ({
           wrongQuestions: state.wrongQuestions.map((w) =>
             w.id === id
@@ -214,7 +212,48 @@ export const useAppStore = create<AppState>()(
                 }
               : w
           ),
-        })),
+        }));
+        const uid = target?.userId;
+        if (isCloudConfigured() && uid) {
+          const list = get().wrongQuestions.filter((w) => w.userId === uid);
+          overwriteWrongQuestionsCloud(uid, list).catch(() => {});
+        }
+      },
+
+      // 记录一次判分练习（首页"我的进度"统计）
+      recordPractice: (userId, bankId, questionId, correct) => {
+        set((state) => {
+          const key = `${bankId}:${questionId}`;
+          const cur = state.practiceStats[userId] || { answeredCount: 0, correctCount: 0, practicedIds: [] };
+          return {
+            practiceStats: {
+              ...state.practiceStats,
+              [userId]: {
+                answeredCount: cur.answeredCount + 1,
+                correctCount: cur.correctCount + (correct ? 1 : 0),
+                practicedIds: cur.practicedIds.includes(key) ? cur.practicedIds : [...cur.practicedIds, key],
+              },
+            },
+          };
+        });
+        // 统计变化后异步同步云端
+        if (isCloudConfigured() && userId) {
+          const cur = get().practiceStats[userId];
+          if (cur) overwritePracticeStatsCloud(userId, cur).catch(() => {});
+        }
+      },
+
+      // 登录后从云端恢复该用户数据（云端为主，覆盖本地该用户部分）
+      hydrateCloudUserData: (userId, wrongList, stats) =>
+        set((state) => {
+          const others = state.wrongQuestions.filter((w) => w.userId !== userId);
+          return {
+            wrongQuestions: [...others, ...wrongList],
+            practiceStats: stats
+              ? { ...state.practiceStats, [userId]: stats }
+              : state.practiceStats,
+          };
+        }),
     }),
     {
       name: 'question-master-storage',
@@ -228,9 +267,11 @@ export const useAppStore = create<AppState>()(
         selectedBankId: state.selectedBankId,
         currentUser: state.currentUser,
         currentUserName: state.currentUserName,
-        userAccounts: state.userAccounts,
+        currentUserId: state.currentUserId,
+        practiceView: state.practiceView,
         wrongQuestions: state.wrongQuestions,
-      }),
+        practiceStats: state.practiceStats,
+        }),
       // 每次从 localStorage 恢复时自动清洗旧数据中可能存在的 A./B./C./D. 选项前缀
       onRehydrateStorage: () => (state) => {
         if (state && Array.isArray(state.questionBanks)) {
