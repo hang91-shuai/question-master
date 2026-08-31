@@ -565,7 +565,8 @@ export function Practice() {
     setPracticeWrongIds(saved.practiceWrongIds);
     setAnswers(saved.answers);
     const restoredMode: AnswerMode = saved.practiceMode || saved.mode || 'immediate';
-    setMode(restoredMode);
+    // 只影响本次答题的展示方式（practiceMode），不覆盖组卷配置页的 mode，
+    // 避免「继续答题」后组卷页按钮/选项被上次练习模式污染
     setPracticeMode(restoredMode);
     setPracticeSource(inferSource(saved));
     setIndex(Math.min(saved.index, saved.questions.length - 1));
