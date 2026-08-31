@@ -308,8 +308,8 @@ export function Practice() {
     setCurAnswer('');
     setAnswers([]);
     setRevealed(false);
-    // 错题练习也快照本次展示方式，并标记来源为错题练习
-    setPracticeMode(mode);
+    // 错题练习固定「逐题即时对答案」，不跟随自由刷题的答案展示方式设置
+    setPracticeMode('immediate');
     setPracticeSource('wrong');
     setView('answer');
   };
@@ -568,8 +568,10 @@ export function Practice() {
     const restoredMode: AnswerMode = saved.practiceMode || saved.mode || 'immediate';
     // 只影响本次答题的展示方式（practiceMode），不覆盖组卷配置页的 mode，
     // 避免「继续答题」后组卷页按钮/选项被上次练习模式污染
-    setPracticeMode(restoredMode);
-    setPracticeSource(inferSource(saved));
+    // 标准卷/错题练习的存档恢复时也固定「逐题即时对答案」
+    const restoredSource = inferSource(saved);
+    setPracticeMode(restoredSource === 'standard' || restoredSource === 'wrong' ? 'immediate' : restoredMode);
+    setPracticeSource(restoredSource);
     setIndex(Math.min(saved.index, saved.questions.length - 1));
     const restoredQ = saved.questions[Math.min(saved.index, saved.questions.length - 1)];
     const restoredAns = saved.answers.find((a) => a.questionId === restoredQ?.id);
