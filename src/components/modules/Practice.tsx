@@ -891,9 +891,9 @@ export function Practice() {
         {view === 'answer' && currentQuestion && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-8">
             {/* 顶部：进度 */}
-            <div className="flex items-center mb-3 flex-wrap gap-y-2 gap-x-2 sm:gap-x-3">
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
               {/* 左侧：退出 + 错题练习标识 */}
-              <div className="flex items-center gap-2 flex-1 basis-0 min-w-[70px]">
+              <div className="flex items-center gap-2 sm:flex-1">
                 <Button
                   type="text"
                   size="small"
@@ -906,11 +906,11 @@ export function Practice() {
                 {practiceWrongIds.length > 0 && <Tag color="red">错题练习</Tag>}
               </div>
 
-              {/* 中间：题型标签（不伸缩，避免挤压两侧文字；手机端更小） */}
-              <div className="flex-none flex justify-center min-w-0">
+              {/* 中间：题型标签 */}
+              <div className="flex justify-center sm:flex-none">
                 <div
                   key={currentQuestion.type}
-                  className="type-tag-pop inline-flex items-center justify-center rounded-full px-3 sm:px-6 py-1 sm:py-1.5 text-sm sm:text-lg font-bold text-white shadow-sm max-w-full"
+                  className="type-tag-pop inline-flex items-center justify-center rounded-full px-4 sm:px-6 py-1 sm:py-1.5 text-sm sm:text-lg font-bold text-white shadow-sm"
                   style={{ backgroundColor: typeColorHex[currentQuestion.type] }}
                 >
                   {typeLabels[currentQuestion.type]}
@@ -918,8 +918,8 @@ export function Practice() {
               </div>
 
               {/* 右侧：进度 + 答题卡 */}
-              <div className="flex items-center gap-2 flex-1 basis-0 justify-end min-w-[120px]">
-                <span className="text-gray-500 text-xs sm:text-sm whitespace-nowrap">第 {index + 1} / {questions.length} 题 · 已答 {answeredCount} 题</span>
+              <div className="flex items-center justify-between sm:justify-end sm:flex-1 gap-2">
+                <span className="text-gray-500 text-xs sm:text-sm">第 {index + 1} / {questions.length} 题 · 已答 {answeredCount} 题</span>
                 <Button type="primary" ghost size="small" onClick={() => setAnswerSheetOpen(true)}>
                   答题卡
                 </Button>
