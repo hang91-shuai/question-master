@@ -281,7 +281,8 @@ export function Practice() {
     setRevealed(false);
     setPracticeWrongIds([]);
     // 快照本次练习的展示方式与来源（后续切换配置页不影响本次练习）
-    setPracticeMode(mode);
+    // 标准考试卷固定「逐题即时对答案」，不跟随自由刷题的答案展示方式设置
+    setPracticeMode(source === 'standard' ? 'immediate' : mode);
     setPracticeSource(source);
     setView('answer');
   };
