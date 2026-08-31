@@ -317,14 +317,30 @@ export function Practice() {
   // 当前题是否已被用户标记（用于"标记本题"按钮状态）
   const curFlagged = currentQuestion ? answers.find((a) => a.questionId === currentQuestion.id)?.flagged : false;
 
+  // 从解析文本推断判断题答案（兜底：部分旧题答案录为“略”，但解析含结论）
+  const inferJudgeAnswer = (analysis?: string): string | null => {
+    if (!analysis) return null;
+    const text = String(analysis);
+    if (/该说法错误|该题错误|此说法错误|这种说法错误|是不正确的|是错误的|不正确|不对|不成立|有误|该说法不/.test(text)) return '错误';
+    if (/该说法正确|该题正确|此说法正确|这种说法正确|是正确的|是对的|该说法对|正确|对/.test(text)) return '正确';
+    return null;
+  };
+
   const checkCorrect = (q: Question, a: string): { correct: boolean; actual: string; unscored?: boolean } => {
-    const actual = q.answer?.trim() || '';
+    let actual = q.answer?.trim() || '';
     const ua = a.trim();
     const options = q.options || [];
 
     // 判断题
     if (q.type === 'judge') {
-      if (!actual || actual === '略' || actual === '无') return { correct: false, actual, unscored: true };
+      if (!actual || actual === '略' || actual === '无') {
+        const inferred = inferJudgeAnswer(q.analysis);
+        if (inferred) {
+          actual = inferred;
+        } else {
+          return { correct: false, actual: actual || '', unscored: true };
+        }
+      }
       const norm = (s: string) => (s.includes('正确') || s.includes('对') ? 'T' : s.includes('错误') || s.includes('错') ? 'F' : s);
       return { correct: norm(actual) === norm(ua) && ua !== '', actual };
     }
@@ -875,9 +891,9 @@ export function Practice() {
         {view === 'answer' && currentQuestion && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-8">
             {/* 顶部：进度 */}
-            <div className="flex items-center mb-3 flex-wrap gap-y-2 gap-x-3">
+            <div className="flex items-center mb-3 flex-wrap gap-y-2 gap-x-2 sm:gap-x-3">
               {/* 左侧：退出 + 错题练习标识 */}
-              <div className="flex items-center gap-2 flex-1 basis-0 min-w-[80px]">
+              <div className="flex items-center gap-2 flex-1 basis-0 min-w-[70px]">
                 <Button
                   type="text"
                   size="small"
@@ -890,11 +906,11 @@ export function Practice() {
                 {practiceWrongIds.length > 0 && <Tag color="red">错题练习</Tag>}
               </div>
 
-              {/* 中间：题型标签（更大更居中，切换时有动效） */}
-              <div className="flex-1 basis-0 flex justify-center min-w-0">
+              {/* 中间：题型标签（不伸缩，避免挤压两侧文字；手机端更小） */}
+              <div className="flex-none flex justify-center min-w-0">
                 <div
                   key={currentQuestion.type}
-                  className="type-tag-pop inline-flex items-center justify-center rounded-full px-5 sm:px-6 py-1.5 text-base sm:text-lg font-bold text-white shadow-sm whitespace-nowrap"
+                  className="type-tag-pop inline-flex items-center justify-center rounded-full px-3 sm:px-6 py-1 sm:py-1.5 text-sm sm:text-lg font-bold text-white shadow-sm max-w-full"
                   style={{ backgroundColor: typeColorHex[currentQuestion.type] }}
                 >
                   {typeLabels[currentQuestion.type]}
@@ -902,7 +918,7 @@ export function Practice() {
               </div>
 
               {/* 右侧：进度 + 答题卡 */}
-              <div className="flex items-center gap-2 flex-1 basis-0 justify-end min-w-[140px]">
+              <div className="flex items-center gap-2 flex-1 basis-0 justify-end min-w-[120px]">
                 <span className="text-gray-500 text-xs sm:text-sm whitespace-nowrap">第 {index + 1} / {questions.length} 题 · 已答 {answeredCount} 题</span>
                 <Button type="primary" ghost size="small" onClick={() => setAnswerSheetOpen(true)}>
                   答题卡
